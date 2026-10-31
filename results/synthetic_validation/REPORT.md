@@ -44,7 +44,9 @@ through a documented preprocessing step.
 - Tau interventions are in-model counterfactuals, not claims of a physical
   intervention on an AUV.  The complete tau-vector/input-feature Spearman
   matrix and aligned vector-change data are in `tau_input_spearman.csv` and
-  `tau_input_change_comparison.csv`.
+  `tau_input_change_comparison.csv`.  Lagged change correlations use positive
+  lag to mean that an input change precedes a tau change; see
+  `tau_input_delay_summary.csv` and `tau_input_lagged_spearman_summary.csv`.
 
 Configuration:
 
@@ -68,6 +70,7 @@ Configuration:
   "save_models": false,
   "tau_overlap_epsilon": 0.1,
   "tau_grid_size": 0.5,
+  "tau_lag_max_steps": 8,
   "filter_q_candidates": [
     0.0025,
     0.01,

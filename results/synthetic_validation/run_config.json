@@ -17,6 +17,7 @@
   "save_models": false,
   "tau_overlap_epsilon": 0.1,
   "tau_grid_size": 0.5,
+  "tau_lag_max_steps": 8,
   "filter_q_candidates": [
     0.0025,
     0.01,

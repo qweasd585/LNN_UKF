@@ -22,6 +22,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 from scipy.stats import chi2, spearmanr
@@ -321,6 +322,210 @@ def vector_change_comparison(vector: Array, features: Array) -> pd.DataFrame:
     )
 
 
+def lagged_vector_feature_spearman(
+    vector: Array,
+    features: Array,
+    feature_names: Sequence[str],
+    vector_names: Sequence[str] | None = None,
+    max_lag_steps: int = 8,
+) -> pd.DataFrame:
+    """Calculate within-trajectory lagged Spearman correlations of changes.
+
+    For a positive ``lag_steps`` value, the statistic is
+    ``Spearman(delta_vector[t], delta_feature[t - lag_steps])``.  A positive
+    peak therefore means that an input change precedes a later change in the
+    corresponding liquid-time component.  Every trajectory is evaluated
+    separately so a correlation cannot be created by joining unrelated paths.
+    """
+    vector_array = np.asarray(vector, dtype=float)
+    feature_array = np.asarray(features, dtype=float)
+    if vector_array.ndim == 2:
+        vector_array = vector_array[None, ...]
+    if feature_array.ndim == 2:
+        feature_array = feature_array[None, ...]
+    if vector_array.ndim != 3 or feature_array.ndim != 3:
+        raise ValueError("vector and features must have shape [T, D] or [N, T, D]")
+    if vector_array.shape[:2] != feature_array.shape[:2]:
+        raise ValueError("vector and features must have matching [N, T] prefixes")
+    if len(feature_names) != feature_array.shape[-1]:
+        raise ValueError("feature_names length must match the final features dimension")
+    names = list(vector_names) if vector_names is not None else [f"component_{i}" for i in range(vector_array.shape[-1])]
+    if len(names) != vector_array.shape[-1]:
+        raise ValueError("vector_names length must match the final vector dimension")
+    if max_lag_steps < 0:
+        raise ValueError("max_lag_steps must be non-negative")
+
+    vector_change = np.diff(vector_array, axis=1)
+    feature_change = np.diff(feature_array, axis=1)
+    transitions = vector_change.shape[1]
+    rows: list[dict[str, float | int | str]] = []
+    for trajectory_index in range(vector_change.shape[0]):
+        for component_index, component_name in enumerate(names):
+            for feature_index, feature_name in enumerate(feature_names):
+                series_vector = vector_change[trajectory_index, :, component_index]
+                series_feature = feature_change[trajectory_index, :, feature_index]
+                for lag_steps in range(-max_lag_steps, max_lag_steps + 1):
+                    if lag_steps > 0:
+                        x, y = series_vector[lag_steps:], series_feature[: transitions - lag_steps]
+                    elif lag_steps < 0:
+                        x, y = series_vector[: transitions + lag_steps], series_feature[-lag_steps:]
+                    else:
+                        x, y = series_vector, series_feature
+                    correlation, p_value = _finite_spearman(x, y)
+                    rows.append(
+                        {
+                            "trajectory_index": trajectory_index,
+                            "vector_component": str(component_name),
+                            "input_feature": str(feature_name),
+                            "lag_steps": lag_steps,
+                            "spearman_rho": correlation,
+                            "p_value": p_value,
+                            "n": int((np.isfinite(x) & np.isfinite(y)).sum()),
+                        }
+                    )
+    return pd.DataFrame(rows)
+
+
+def summarize_lagged_spearman(lagged: pd.DataFrame, dt: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Aggregate lag curves and select each pair's strongest consistent delay."""
+    required = {"trajectory_index", "vector_component", "input_feature", "lag_steps", "spearman_rho"}
+    if missing := required - set(lagged.columns):
+        raise ValueError(f"lagged is missing required columns: {sorted(missing)}")
+    if not np.isfinite(dt) or dt <= 0.0:
+        raise ValueError("dt must be positive and finite")
+    grouped = lagged.groupby(["vector_component", "input_feature", "lag_steps"], sort=False)["spearman_rho"]
+    summary = grouped.agg(
+        mean_spearman_rho="mean",
+        median_spearman_rho="median",
+        standard_error=lambda values: float(values.sem()) if values.count() > 1 else np.nan,
+        n_trajectories="count",
+        mean_abs_spearman_rho=lambda values: float(np.nanmean(np.abs(values))),
+    ).reset_index()
+    summary["lag_seconds"] = summary["lag_steps"] * float(dt)
+
+    peak_rows: list[dict[str, float | int | str]] = []
+    for (component, feature), rows in summary.groupby(["vector_component", "input_feature"], sort=False):
+        valid = rows[np.isfinite(rows["mean_spearman_rho"])].copy()
+        if valid.empty:
+            peak_rows.append(
+                {
+                    "vector_component": component,
+                    "input_feature": feature,
+                    "peak_lag_steps": np.nan,
+                    "peak_lag_seconds": np.nan,
+                    "peak_mean_spearman_rho": np.nan,
+                    "zero_lag_mean_spearman_rho": np.nan,
+                    "delay_direction": "undefined",
+                }
+            )
+            continue
+        valid["absolute_mean_rho"] = valid["mean_spearman_rho"].abs()
+        ranked = valid.sort_values(["absolute_mean_rho", "lag_steps"], ascending=[False, True])
+        peak = ranked.iloc[0]
+        zero = valid.loc[valid["lag_steps"] == 0, "mean_spearman_rho"]
+        peak_lag = int(peak["lag_steps"])
+        effect_size = abs(float(peak["mean_spearman_rho"]))
+        detected = effect_size >= 0.20
+        direction = (
+            "no_clear_lag"
+            if not detected
+            else "input_leads_tau"
+            if peak_lag > 0
+            else "tau_leads_input"
+            if peak_lag < 0
+            else "synchronous"
+        )
+        peak_rows.append(
+            {
+                "vector_component": component,
+                "input_feature": feature,
+                "peak_lag_steps": peak_lag,
+                "peak_lag_seconds": float(peak["lag_seconds"]),
+                "peak_mean_spearman_rho": float(peak["mean_spearman_rho"]),
+                "zero_lag_mean_spearman_rho": float(zero.iloc[0]) if len(zero) else np.nan,
+                "delay_detected": detected,
+                "delay_direction": direction,
+            }
+        )
+    return summary, pd.DataFrame(peak_rows)
+
+
+def summarize_readout_roles(
+    contributions: Array,
+    direction_threshold: float = 0.80,
+    magnitude_cv_threshold: float = 0.50,
+    weak_relative_magnitude_threshold: float = 0.05,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Assess whether each unit's signed readout role remains stable by path.
+
+    A unit is labelled ``consistent`` only when its time-mean signed 2-D
+    contribution has mean pairwise cosine at least ``direction_threshold``
+    across trajectories and its mean magnitude CV is at most
+    ``magnitude_cv_threshold``.  Weak units are labelled separately before the
+    consistency test so an almost-zero contribution is not overinterpreted.
+    """
+    values = np.asarray(contributions, dtype=float)
+    if values.ndim == 3:
+        values = values[None, ...]
+    if values.ndim != 4:
+        raise ValueError("contributions must have shape [T,H,D] or [N,T,H,D]")
+    if values.shape[-1] != 2:
+        raise ValueError("role consistency is defined for two-dimensional readout contributions")
+    mean_vectors = np.nanmean(values, axis=1)
+    mean_magnitude = np.nanmean(np.linalg.norm(values, axis=-1), axis=1)
+    rms_magnitude = np.sqrt(np.nanmean(np.sum(values**2, axis=-1), axis=1))
+    trajectory_rows: list[dict[str, float | int]] = []
+    for trajectory_index in range(values.shape[0]):
+        for unit in range(values.shape[2]):
+            vector = mean_vectors[trajectory_index, unit]
+            trajectory_rows.append(
+                {
+                    "trajectory_index": trajectory_index,
+                    "hidden_unit": unit,
+                    "mean_contribution_east": float(vector[0]),
+                    "mean_contribution_north": float(vector[1]),
+                    "mean_magnitude": float(mean_magnitude[trajectory_index, unit]),
+                    "rms_magnitude": float(rms_magnitude[trajectory_index, unit]),
+                    "mean_direction_rad": float(np.arctan2(vector[1], vector[0])),
+                }
+            )
+    by_trajectory = pd.DataFrame(trajectory_rows)
+    total_mean_magnitude = float(np.nansum(np.nanmean(mean_magnitude, axis=0)))
+    summary_rows: list[dict[str, float | bool | int | str]] = []
+    for unit in range(values.shape[2]):
+        vectors = mean_vectors[:, unit, :]
+        norms = np.linalg.norm(vectors, axis=1)
+        cosines: list[float] = []
+        for left in range(len(vectors)):
+            for right in range(left + 1, len(vectors)):
+                if norms[left] > 1.0e-12 and norms[right] > 1.0e-12:
+                    cosines.append(float(np.dot(vectors[left], vectors[right]) / (norms[left] * norms[right])))
+        average_magnitude = float(np.nanmean(mean_magnitude[:, unit]))
+        magnitude_cv = float(np.nanstd(mean_magnitude[:, unit]) / average_magnitude) if average_magnitude > 1.0e-12 else np.nan
+        relative_magnitude = average_magnitude / total_mean_magnitude if total_mean_magnitude > 1.0e-12 else np.nan
+        mean_pairwise_cosine = float(np.mean(cosines)) if cosines else np.nan
+        min_pairwise_cosine = float(np.min(cosines)) if cosines else np.nan
+        if not np.isfinite(relative_magnitude) or relative_magnitude < weak_relative_magnitude_threshold:
+            label = "weak"
+        elif np.isfinite(mean_pairwise_cosine) and mean_pairwise_cosine >= direction_threshold and magnitude_cv <= magnitude_cv_threshold:
+            label = "consistent"
+        else:
+            label = "trajectory_dependent"
+        summary_rows.append(
+            {
+                "hidden_unit": unit,
+                "mean_magnitude": average_magnitude,
+                "relative_mean_magnitude": relative_magnitude,
+                "magnitude_cv": magnitude_cv,
+                "mean_pairwise_cosine": mean_pairwise_cosine,
+                "min_pairwise_cosine": min_pairwise_cosine,
+                "role_label": label,
+                "same_role_across_trajectories": label == "consistent",
+            }
+        )
+    return by_trajectory, pd.DataFrame(summary_rows)
+
+
 def tau_intervention_summary(
     baseline: Array,
     counterfactuals: Mapping[float, Array],
@@ -522,8 +727,13 @@ def plot_tau_input_diagnostics(
     change_comparison: pd.DataFrame,
     path: str | Path,
     title: str = "Liquid-time vector and input diagnostics",
+    include_scatter: bool = False,
 ) -> Path:
-    """Plot the full tau-input Spearman matrix and aligned vector changes."""
+    """Plot the tau-input Spearman matrix and aligned vector changes.
+
+    The optional scatter panel is disabled by default because the heatmap and
+    aligned-change plot are more legible for per-trajectory diagnostics.
+    """
     required_correlation = {"vector_component", "input_feature", "spearman_rho"}
     required_change = {
         "time_index",
@@ -542,9 +752,15 @@ def plot_tau_input_diagnostics(
         .reindex(index=components, columns=features)
         .to_numpy(dtype=float)
     )
-    figure, (heatmap_axis, change_axis, scatter_axis) = plt.subplots(
-        1, 3, figsize=(16.0, 4.6), constrained_layout=True, gridspec_kw={"width_ratios": [1.25, 1.0, 1.0]}
+    panels = 3 if include_scatter else 2
+    figure, axes = plt.subplots(
+        1,
+        panels,
+        figsize=(16.0, 4.6) if include_scatter else (11.2, 4.6),
+        constrained_layout=True,
+        gridspec_kw={"width_ratios": [1.25, 1.0, 1.0]} if include_scatter else {"width_ratios": [1.25, 1.0]},
     )
+    heatmap_axis, change_axis = axes[:2]
     image = heatmap_axis.imshow(matrix, cmap="coolwarm", vmin=-1.0, vmax=1.0, aspect="auto")
     heatmap_axis.set_xticks(np.arange(len(features)), features, rotation=35, ha="right", fontsize=8)
     heatmap_axis.set_yticks(np.arange(len(components)), components, fontsize=8)
@@ -586,19 +802,129 @@ def plot_tau_input_diagnostics(
     change_axis.grid(alpha=0.22)
     change_axis.legend(fontsize=8)
 
-    tau_change = change_comparison["tau_vector_change_zscore"].to_numpy(dtype=float)
-    input_change = change_comparison["input_vector_change_zscore"].to_numpy(dtype=float)
-    valid = np.isfinite(tau_change) & np.isfinite(input_change)
-    rho, _ = _finite_spearman(tau_change, input_change)
-    scatter_axis.scatter(input_change[valid], tau_change[valid], s=13, alpha=0.42, color="#5b5b5b", edgecolors="none")
-    scatter_axis.axhline(0.0, color="black", linewidth=0.7, alpha=0.35)
-    scatter_axis.axvline(0.0, color="black", linewidth=0.7, alpha=0.35)
-    scatter_axis.set(
-        title=f"Change association (rho={rho:.2f})",
-        xlabel=r"$\|\Delta z(u)\|_2$ z-score",
-        ylabel=r"$\|\Delta\tau\|_2$ z-score",
+    if include_scatter:
+        scatter_axis = axes[2]
+        tau_change = change_comparison["tau_vector_change_zscore"].to_numpy(dtype=float)
+        input_change = change_comparison["input_vector_change_zscore"].to_numpy(dtype=float)
+        valid = np.isfinite(tau_change) & np.isfinite(input_change)
+        rho, _ = _finite_spearman(tau_change, input_change)
+        scatter_axis.scatter(input_change[valid], tau_change[valid], s=13, alpha=0.42, color="#5b5b5b", edgecolors="none")
+        scatter_axis.axhline(0.0, color="black", linewidth=0.7, alpha=0.35)
+        scatter_axis.axvline(0.0, color="black", linewidth=0.7, alpha=0.35)
+        scatter_axis.set(
+            title=f"Change association (rho={rho:.2f})",
+            xlabel=r"$\|\Delta z(u)\|_2$ z-score",
+            ylabel=r"$\|\Delta\tau\|_2$ z-score",
+        )
+        scatter_axis.grid(alpha=0.18)
+    figure.suptitle(title, fontsize=13)
+    figure.savefig(output, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    return output
+
+
+def plot_tau_input_lag_diagnostics(
+    lag_summary: pd.DataFrame,
+    peak_summary: pd.DataFrame,
+    path: str | Path,
+    title: str = "Lagged input-to-tau change diagnostics",
+) -> Path:
+    """Visualize signed lag peaks and the average strength of lag curves."""
+    required_lag = {"vector_component", "input_feature", "lag_steps", "mean_spearman_rho"}
+    required_peak = {"vector_component", "input_feature", "peak_lag_steps", "peak_mean_spearman_rho"}
+    if missing := required_lag - set(lag_summary.columns):
+        raise ValueError(f"lag_summary is missing required columns: {sorted(missing)}")
+    if missing := required_peak - set(peak_summary.columns):
+        raise ValueError(f"peak_summary is missing required columns: {sorted(missing)}")
+    components = list(dict.fromkeys(peak_summary["vector_component"].astype(str)))
+    features = list(dict.fromkeys(peak_summary["input_feature"].astype(str)))
+    lag_matrix = (
+        peak_summary.pivot(index="vector_component", columns="input_feature", values="peak_lag_steps")
+        .reindex(index=components, columns=features)
+        .to_numpy(dtype=float)
     )
-    scatter_axis.grid(alpha=0.18)
+    rho_matrix = (
+        peak_summary.pivot(index="vector_component", columns="input_feature", values="peak_mean_spearman_rho")
+        .reindex(index=components, columns=features)
+        .to_numpy(dtype=float)
+    )
+    maximum_lag = max(float(np.nanmax(np.abs(lag_matrix))) if np.isfinite(lag_matrix).any() else 1.0, 1.0)
+    output = _prepare_path(path)
+    figure, (lag_axis, rho_axis, curve_axis) = plt.subplots(1, 3, figsize=(16.0, 4.8), constrained_layout=True)
+    lag_image = lag_axis.imshow(lag_matrix, cmap="PiYG", vmin=-maximum_lag, vmax=maximum_lag, aspect="auto")
+    rho_image = rho_axis.imshow(rho_matrix, cmap="coolwarm", vmin=-1.0, vmax=1.0, aspect="auto")
+    for axis, matrix, label, formatter in (
+        (lag_axis, lag_matrix, "Peak lag: positive = input leads tau", lambda value: f"{value:.0f}"),
+        (rho_axis, rho_matrix, "Correlation at peak lag", lambda value: f"{value:.2f}"),
+    ):
+        axis.set_xticks(np.arange(len(features)), features, rotation=35, ha="right", fontsize=8)
+        axis.set_yticks(np.arange(len(components)), components, fontsize=8)
+        axis.set_title(label, fontsize=10)
+        for row in range(matrix.shape[0]):
+            for column in range(matrix.shape[1]):
+                value = matrix[row, column]
+                if np.isfinite(value):
+                    axis.text(
+                        column,
+                        row,
+                        formatter(value),
+                        ha="center",
+                        va="center",
+                        fontsize=7,
+                        color="white" if abs(value) > (0.52 if axis is rho_axis else maximum_lag * 0.52) else "black",
+                    )
+    figure.colorbar(lag_image, ax=lag_axis, fraction=0.047, pad=0.04, label="lag steps")
+    figure.colorbar(rho_image, ax=rho_axis, fraction=0.047, pad=0.04, label="mean Spearman rho")
+
+    mean_curve = lag_summary.groupby("lag_steps", sort=True)["mean_spearman_rho"].apply(
+        lambda values: float(np.nanmean(np.abs(values)))
+    )
+    curve_axis.plot(mean_curve.index, mean_curve.to_numpy(), color="#d62728", linewidth=2.2)
+    curve_axis.axvline(0.0, color="black", linewidth=0.8, alpha=0.5)
+    curve_axis.set(
+        title="Mean absolute pairwise correlation",
+        xlabel="Lag steps (+: input leads tau)",
+        ylabel=r"mean $|\rho|$",
+    )
+    curve_axis.grid(alpha=0.22)
+    figure.suptitle(title, fontsize=13)
+    figure.savefig(output, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    return output
+
+
+def plot_readout_role_consistency(
+    role_summary: pd.DataFrame,
+    path: str | Path,
+    title: str = "Readout-role consistency across trajectories",
+) -> Path:
+    """Plot direction agreement and magnitude variation for each hidden unit."""
+    required = {"hidden_unit", "mean_pairwise_cosine", "magnitude_cv", "role_label"}
+    if missing := required - set(role_summary.columns):
+        raise ValueError(f"role_summary is missing required columns: {sorted(missing)}")
+    frame = role_summary.sort_values("hidden_unit")
+    labels = [f"unit {int(unit)}" for unit in frame["hidden_unit"]]
+    colors = {"consistent": "#2ca02c", "trajectory_dependent": "#d62728", "weak": "#7f7f7f"}
+    bar_colors = [colors.get(str(label), "#555555") for label in frame["role_label"]]
+    output = _prepare_path(path)
+    figure, (direction_axis, magnitude_axis) = plt.subplots(1, 2, figsize=(10.5, 4.2), constrained_layout=True)
+    direction_axis.bar(labels, frame["mean_pairwise_cosine"], color=bar_colors)
+    direction_axis.axhline(0.80, color="black", linestyle="--", linewidth=1.0, label="consistent threshold")
+    direction_axis.set(title="Direction agreement", ylabel="mean pairwise cosine", ylim=(-1.0, 1.05))
+    direction_axis.grid(axis="y", alpha=0.22)
+    direction_axis.legend(
+        handles=[
+            plt.Line2D([], [], color="black", linestyle="--", label="consistent threshold"),
+            *[Patch(facecolor=color, label=label.replace("_", " ")) for label, color in colors.items()],
+        ],
+        fontsize=7,
+        loc="lower right",
+    )
+    magnitude_axis.bar(labels, frame["magnitude_cv"], color=bar_colors)
+    magnitude_axis.axhline(0.50, color="black", linestyle="--", linewidth=1.0, label="consistent threshold")
+    magnitude_axis.set(title="Magnitude stability", ylabel="coefficient of variation")
+    magnitude_axis.grid(axis="y", alpha=0.22)
+    magnitude_axis.legend(fontsize=8)
     figure.suptitle(title, fontsize=13)
     figure.savefig(output, dpi=200, bbox_inches="tight")
     plt.close(figure)
@@ -781,6 +1107,7 @@ def plot_readout_contributions(
     output = _prepare_path(path)
     figure, axis = plt.subplots(figsize=(10, max(3.0, 0.5 * magnitude.shape[0] + 1)), constrained_layout=True)
     image = axis.imshow(magnitude, aspect="auto", origin="lower", interpolation="nearest", cmap="viridis")
+    axis.set_yticks(np.arange(magnitude.shape[0]), [str(index) for index in range(magnitude.shape[0])])
     axis.set(xlabel="Time step", ylabel="Hidden unit", title=title)
     figure.colorbar(image, ax=axis, label=r"$\|A_{:,i}h_i(t)\|_2$")
     figure.savefig(output, dpi=180, bbox_inches="tight")
