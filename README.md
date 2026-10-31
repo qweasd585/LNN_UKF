@@ -61,7 +61,7 @@ python -m venv .venv
   --threads 4 --output results/synthetic_multiseed
 ```
 
-执行结束后，`REPORT.md` 只汇总本次实际产生的数值；`metrics_summary.csv` 与 `ablation_metrics_summary.csv` 提供每航迹 bootstrap 95% CI；`figures/` 保存轨迹、误差、校准、液态时间常数和内部节点贡献图。若要在 Excel 中修改字体或颜色，请使用 `tools/csv_to_xlsx.py` 批量转换 CSV，而不要把格式化结果当作算法输出的一部分提交。
+执行结束后，`REPORT.md` 只汇总本次实际产生的数值；`metrics_summary.csv` 与 `ablation_metrics_summary.csv` 提供每航迹 bootstrap 95% CI；`figures/` 保存轨迹、误差、校准、液态时间常数和内部节点贡献图。`trajectory_comparison_six.png` 使用六条局部裁切轨迹叠加全部模型，不纳入远处锚点；`tau_input_diagnostics.png` 与相应 CSV 保存完整 tau 向量和输入特征的关系。若要在 Excel 中修改字体或颜色，请使用 `tools/csv_to_xlsx.py` 批量转换 CSV，而不要把格式化结果当作算法输出的一部分提交。
 
 ## 接入 LNN_Lack 数据
 
@@ -116,12 +116,12 @@ np.savez_compressed(
 
 运行器会生成以下可量化诊断，而不只展示轨迹图：
 
-1. **液态时间常数与机动状态**：保存每个单元的 (	au_i(t))，与航向变化率做按航迹对齐的 Spearman 相关，结果在 `tau_motion_correlation.csv`。
-2. **(	au) 干预与轨迹重合**：固定输入、初始值和量测，将全部 (	au) 乘以 (0.5,0.75,1,1.25,1.5)，报告平均/末端轨迹偏离、时间对齐重合率
+1. **完整液态时间向量与完整输入向量**：保存所有单元形成的 \(\tau(t)\in\mathbb{R}^H\)，并与直接输入的控制东/北分量、滤波位置及由控制导出的速度和连续航向角计算完整的两两 Spearman 矩阵，结果在 `tau_input_spearman.csv`。`tau_input_change_comparison.csv` 保存 \(\|\Delta\tau\|_2\) 与标准化 \(\|\Delta z(u)\|_2\) 的对齐变化；图 `tau_input_diagnostics.png` 同时展示相关热图、平均变化曲线和变化散点图。
+2. **(\tau) 干预与真实轨迹**：固定输入、初始值和量测，将全部动态 \(\tau(t)\) 乘以 \(0.5,0.75,1,1.25,1.5\)，在 `tau_interventions.csv` 中同时报告相对真实轨迹的 RMSE、MAE、ADE、FDE，以及相对未干预动态 \(\tau(t)\) 的平均/末端偏离、时间对齐重合率
    \[
    O_\epsilon=\frac1T\sum_t\mathbf{1}\{\|\hat x_t^{cf}-\hat x_t\|\le\epsilon\}
    \]
-   与栅格占据 IoU。默认合成场景使用 \(\epsilon=0.10\) m 和 0.50 m 栅格；真实数据应按任务允许定位误差预先设定。见 `tau_interventions.csv` 和 `tau_trajectory_interventions.png`。
+   与栅格占据 IoU。重合率和 IoU 用于衡量干预敏感性；定位性能以真实轨迹误差为准。默认合成场景使用 \(\epsilon=0.10\) m 和 0.50 m 栅格；真实数据应按任务允许定位误差预先设定。独立训练的固定 \(\tau\) 消融在 `ablation_metrics_summary.csv` 的 `Fixed tau` 行。见 `tau_interventions.csv` 和 `tau_trajectory_interventions.png`。
 3. **内部节点到位移的闭合**：对每个单元计算 (c_i(t)=A_{:,i}h_i(t))，展示热图并数值检查
    \[
    Ah_t+b=\sum_i c_i(t)+b.

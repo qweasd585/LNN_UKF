@@ -212,35 +212,113 @@ def occupancy_iou(reference: Array, counterfactual: Array, grid_size: float = 1.
     return len(ref_cells & cf_cells) / len(ref_cells | cf_cells)
 
 
-def tau_motion_correlation(tau: Array, motion_statistic: Array) -> pd.DataFrame:
-    """Spearman correlations between each liquid time constant and motion statistic.
+def _finite_spearman(x: Array, y: Array) -> tuple[float, float]:
+    """Compute Spearman rho without issuing warnings for constant series."""
+    valid = np.isfinite(x) & np.isfinite(y)
+    x_valid, y_valid = x[valid], y[valid]
+    if x_valid.size < 3 or np.ptp(x_valid) <= 1.0e-12 or np.ptp(y_valid) <= 1.0e-12:
+        return np.nan, np.nan
+    correlation, p_value = spearmanr(x_valid, y_valid)
+    return float(correlation), float(p_value)
 
-    ``tau`` may be ``[T, H]`` or ``[N, T, H]``.  The motion statistic has the
-    matching prefix shape without hidden-unit dimension.
+
+def vector_feature_spearman_correlation(
+    vector: Array,
+    features: Array,
+    feature_names: Sequence[str],
+    vector_names: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    """Return the pairwise Spearman matrix between vector components and inputs.
+
+    Spearman correlation is defined for two scalar series, not directly for two
+    multivariate vectors.  This function therefore retains every coordinate of
+    ``vector`` and every input feature, and returns their full pairwise matrix
+    instead of first averaging the liquid-time-constant vector.
     """
-    tau_array = np.asarray(tau, dtype=float)
-    statistic = np.asarray(motion_statistic, dtype=float)
-    if tau_array.ndim == 2:
-        tau_array = tau_array[None, ...]
-    if tau_array.ndim != 3 or statistic.shape != tau_array.shape[:2]:
-        raise ValueError(
-            "tau must be [T, H] or [N, T, H] and motion_statistic must match [T] or [N, T]"
-        )
-    rows: list[dict[str, float | int]] = []
-    for hidden_unit in range(tau_array.shape[-1]):
-        x = tau_array[..., hidden_unit].reshape(-1)
-        y = statistic.reshape(-1)
-        valid = np.isfinite(x) & np.isfinite(y)
-        correlation, p_value = spearmanr(x[valid], y[valid]) if valid.sum() >= 3 else (np.nan, np.nan)
-        rows.append(
-            {
-                "hidden_unit": hidden_unit,
-                "spearman_rho": float(correlation),
-                "p_value": float(p_value),
-                "n": int(valid.sum()),
-            }
-        )
+    vector_array = np.asarray(vector, dtype=float)
+    feature_array = np.asarray(features, dtype=float)
+    if vector_array.ndim == 2:
+        vector_array = vector_array[None, ...]
+    if feature_array.ndim == 2:
+        feature_array = feature_array[None, ...]
+    if vector_array.ndim != 3 or feature_array.ndim != 3:
+        raise ValueError("vector and features must have shape [T, D] or [N, T, D]")
+    if vector_array.shape[:2] != feature_array.shape[:2]:
+        raise ValueError("vector and features must have matching [N, T] prefixes")
+    if len(feature_names) != feature_array.shape[-1]:
+        raise ValueError("feature_names length must match the final features dimension")
+    names = list(vector_names) if vector_names is not None else [f"component_{i}" for i in range(vector_array.shape[-1])]
+    if len(names) != vector_array.shape[-1]:
+        raise ValueError("vector_names length must match the final vector dimension")
+
+    rows: list[dict[str, float | int | str]] = []
+    for component_index, component_name in enumerate(names):
+        x = vector_array[..., component_index].reshape(-1)
+        for feature_index, feature_name in enumerate(feature_names):
+            y = feature_array[..., feature_index].reshape(-1)
+            valid = np.isfinite(x) & np.isfinite(y)
+            correlation, p_value = _finite_spearman(x, y)
+            rows.append(
+                {
+                    "vector_component": str(component_name),
+                    "input_feature": str(feature_name),
+                    "spearman_rho": float(correlation),
+                    "p_value": float(p_value),
+                    "n": int(valid.sum()),
+                }
+            )
     return pd.DataFrame(rows)
+
+
+def vector_change_comparison(vector: Array, features: Array) -> pd.DataFrame:
+    """Measure aligned changes of a state vector and standardized input vector.
+
+    The input coordinates are standardized over all supplied trajectories before
+    their Euclidean change is formed, so mixed-unit features such as position,
+    speed, and heading do not let the largest numerical scale dominate.
+    """
+    vector_array = np.asarray(vector, dtype=float)
+    feature_array = np.asarray(features, dtype=float)
+    if vector_array.ndim == 2:
+        vector_array = vector_array[None, ...]
+    if feature_array.ndim == 2:
+        feature_array = feature_array[None, ...]
+    if vector_array.ndim != 3 or feature_array.ndim != 3:
+        raise ValueError("vector and features must have shape [T, D] or [N, T, D]")
+    if vector_array.shape[:2] != feature_array.shape[:2]:
+        raise ValueError("vector and features must have matching [N, T] prefixes")
+
+    feature_flat = feature_array.reshape(-1, feature_array.shape[-1])
+    means = np.nanmean(feature_flat, axis=0)
+    scales = np.nanstd(feature_flat, axis=0)
+    scales = np.where(scales > 1.0e-12, scales, 1.0)
+    standardized_features = (feature_array - means) / scales
+    tau_change = np.linalg.norm(np.diff(vector_array, axis=1), axis=-1)
+    input_change = np.linalg.norm(np.diff(standardized_features, axis=1), axis=-1)
+
+    finite_tau = tau_change[np.isfinite(tau_change)]
+    finite_input = input_change[np.isfinite(input_change)]
+    tau_mean, tau_scale = (
+        (float(np.mean(finite_tau)), max(float(np.std(finite_tau)), 1.0e-12))
+        if finite_tau.size
+        else (0.0, 1.0)
+    )
+    input_mean, input_scale = (
+        (float(np.mean(finite_input)), max(float(np.std(finite_input)), 1.0e-12))
+        if finite_input.size
+        else (0.0, 1.0)
+    )
+    trajectories, time_steps = tau_change.shape
+    return pd.DataFrame(
+        {
+            "trajectory_index": np.repeat(np.arange(trajectories), time_steps),
+            "time_index": np.tile(np.arange(1, time_steps + 1), trajectories),
+            "tau_vector_change_l2": tau_change.reshape(-1),
+            "input_vector_change_standardized_l2": input_change.reshape(-1),
+            "tau_vector_change_zscore": ((tau_change - tau_mean) / tau_scale).reshape(-1),
+            "input_vector_change_zscore": ((input_change - input_mean) / input_scale).reshape(-1),
+        }
+    )
 
 
 def tau_intervention_summary(
@@ -325,6 +403,204 @@ def plot_trajectory_comparison(
     axis.grid(alpha=0.25)
     axis.legend(loc="best", fontsize=8)
     figure.savefig(output, dpi=180, bbox_inches="tight")
+    plt.close(figure)
+    return output
+
+
+def plot_trajectory_comparison_grid(
+    truth: Array,
+    predictions: Mapping[str, Array],
+    path: str | Path,
+    trajectory_indices: Sequence[int] | None = None,
+    title: str = "Six-trajectory model comparison",
+) -> Path:
+    """Plot all models for six locally cropped trajectories without beacons.
+
+    Every panel computes its own bounds from the truth and all model outputs.
+    This avoids an otherwise distant beacon layout making the path comparison
+    unnecessarily small.
+    """
+    truth_b = _batched_trajectory(truth, "truth")
+    prepared_predictions: dict[str, Array] = {}
+    for model, prediction in predictions.items():
+        prediction_b = _batched_trajectory(prediction, f"predictions[{model!r}]")
+        if prediction_b.shape != truth_b.shape:
+            raise ValueError(f"prediction shape for {model!r} does not match truth")
+        prepared_predictions[str(model)] = prediction_b
+    if truth_b.shape[0] < 1:
+        raise ValueError("at least one trajectory is required")
+    if trajectory_indices is None:
+        count = min(6, truth_b.shape[0])
+        trajectory_indices = np.linspace(0, truth_b.shape[0] - 1, count, dtype=int).tolist()
+    indices = list(trajectory_indices)
+    if not indices or len(indices) > 6:
+        raise ValueError("trajectory_indices must contain between one and six trajectories")
+    if min(indices) < 0 or max(indices) >= truth_b.shape[0]:
+        raise ValueError("trajectory index is out of bounds")
+
+    styles = {
+        "EKF": "#1f77b4",
+        "UKF": "#ff7f0e",
+        "CKF": "#2ca02c",
+        "LNN": "#9467bd",
+        "LSTM": "#e377c2",
+        "CTGRU": "#8c564b",
+        "CTRNN": "#17becf",
+        "LNN+UKF": "#d62728",
+    }
+    figure, axes = plt.subplots(2, 3, figsize=(13.0, 9.3))
+    axes_flat = axes.ravel()
+    handles: list[plt.Line2D] = []
+    labels: list[str] = []
+    for panel, trajectory_index in enumerate(indices):
+        axis = axes_flat[panel]
+        all_points = [truth_b[trajectory_index]] + [
+            prediction[trajectory_index] for prediction in prepared_predictions.values()
+        ]
+        finite_points = np.concatenate(all_points, axis=0)
+        finite_points = finite_points[np.isfinite(finite_points).all(axis=1)]
+        lower = finite_points.min(axis=0)
+        upper = finite_points.max(axis=0)
+        span = float(np.max(upper - lower))
+        padding = max(0.45, 0.07 * span)
+        truth_line, = axis.plot(
+            truth_b[trajectory_index, :, 0],
+            truth_b[trajectory_index, :, 1],
+            color="#111111",
+            linewidth=2.4,
+            zorder=4,
+            label="Truth",
+        )
+        if panel == 0:
+            handles.append(truth_line)
+            labels.append("Truth")
+        for model, prediction in prepared_predictions.items():
+            line, = axis.plot(
+                prediction[trajectory_index, :, 0],
+                prediction[trajectory_index, :, 1],
+                color=styles.get(model, "#555555"),
+                linewidth=2.0 if model == "LNN+UKF" else 1.15,
+                alpha=0.96,
+                zorder=3 if model == "LNN+UKF" else 2,
+                label=model,
+            )
+            if panel == 0:
+                handles.append(line)
+                labels.append(model)
+        centre = (lower + upper) / 2.0
+        half_width = max(0.5 * span + padding, 1.0)
+        axis.set_xlim(centre[0] - half_width, centre[0] + half_width)
+        axis.set_ylim(centre[1] - half_width, centre[1] + half_width)
+        axis.set_aspect("equal", adjustable="box")
+        axis.set_title(f"Trajectory {trajectory_index + 1}", fontsize=10)
+        axis.grid(alpha=0.18, linewidth=0.7)
+        axis.tick_params(labelsize=8)
+        if panel % 3 == 0:
+            axis.set_ylabel("North / m", fontsize=9)
+        if panel >= 3:
+            axis.set_xlabel("East / m", fontsize=9)
+    for axis in axes_flat[len(indices) :]:
+        axis.set_visible(False)
+    figure.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.945),
+        ncol=5,
+        fontsize=8,
+        frameon=False,
+    )
+    figure.suptitle(title, fontsize=13, y=0.99)
+    figure.subplots_adjust(left=0.07, right=0.985, bottom=0.08, top=0.87, wspace=0.20, hspace=0.28)
+    figure.savefig(_prepare_path(path), dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    return Path(path)
+
+
+def plot_tau_input_diagnostics(
+    correlations: pd.DataFrame,
+    change_comparison: pd.DataFrame,
+    path: str | Path,
+    title: str = "Liquid-time vector and input diagnostics",
+) -> Path:
+    """Plot the full tau-input Spearman matrix and aligned vector changes."""
+    required_correlation = {"vector_component", "input_feature", "spearman_rho"}
+    required_change = {
+        "time_index",
+        "tau_vector_change_zscore",
+        "input_vector_change_zscore",
+    }
+    if missing := required_correlation - set(correlations.columns):
+        raise ValueError(f"correlations is missing required columns: {sorted(missing)}")
+    if missing := required_change - set(change_comparison.columns):
+        raise ValueError(f"change_comparison is missing required columns: {sorted(missing)}")
+    output = _prepare_path(path)
+    components = list(dict.fromkeys(correlations["vector_component"].astype(str)))
+    features = list(dict.fromkeys(correlations["input_feature"].astype(str)))
+    matrix = (
+        correlations.pivot(index="vector_component", columns="input_feature", values="spearman_rho")
+        .reindex(index=components, columns=features)
+        .to_numpy(dtype=float)
+    )
+    figure, (heatmap_axis, change_axis, scatter_axis) = plt.subplots(
+        1, 3, figsize=(16.0, 4.6), constrained_layout=True, gridspec_kw={"width_ratios": [1.25, 1.0, 1.0]}
+    )
+    image = heatmap_axis.imshow(matrix, cmap="coolwarm", vmin=-1.0, vmax=1.0, aspect="auto")
+    heatmap_axis.set_xticks(np.arange(len(features)), features, rotation=35, ha="right", fontsize=8)
+    heatmap_axis.set_yticks(np.arange(len(components)), components, fontsize=8)
+    heatmap_axis.set(title="Pairwise Spearman: tau vector × inputs")
+    for row in range(matrix.shape[0]):
+        for column in range(matrix.shape[1]):
+            value = matrix[row, column]
+            if np.isfinite(value):
+                heatmap_axis.text(
+                    column,
+                    row,
+                    f"{value:.2f}",
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color="white" if abs(value) > 0.52 else "black",
+                )
+    figure.colorbar(image, ax=heatmap_axis, fraction=0.047, pad=0.04, label="Spearman rho")
+
+    change_by_time = change_comparison.groupby("time_index", sort=True)[
+        ["tau_vector_change_zscore", "input_vector_change_zscore"]
+    ].mean()
+    change_axis.plot(
+        change_by_time.index,
+        change_by_time["tau_vector_change_zscore"],
+        color="#d62728",
+        linewidth=2.0,
+        label=r"$\|\Delta\tau\|_2$",
+    )
+    change_axis.plot(
+        change_by_time.index,
+        change_by_time["input_vector_change_zscore"],
+        color="#1f77b4",
+        linewidth=2.0,
+        label=r"$\|\Delta z(u)\|_2$",
+    )
+    change_axis.axhline(0.0, color="black", linewidth=0.7, alpha=0.45)
+    change_axis.set(title="Mean aligned changes", xlabel="Time step", ylabel="z-score")
+    change_axis.grid(alpha=0.22)
+    change_axis.legend(fontsize=8)
+
+    tau_change = change_comparison["tau_vector_change_zscore"].to_numpy(dtype=float)
+    input_change = change_comparison["input_vector_change_zscore"].to_numpy(dtype=float)
+    valid = np.isfinite(tau_change) & np.isfinite(input_change)
+    rho, _ = _finite_spearman(tau_change, input_change)
+    scatter_axis.scatter(input_change[valid], tau_change[valid], s=13, alpha=0.42, color="#5b5b5b", edgecolors="none")
+    scatter_axis.axhline(0.0, color="black", linewidth=0.7, alpha=0.35)
+    scatter_axis.axvline(0.0, color="black", linewidth=0.7, alpha=0.35)
+    scatter_axis.set(
+        title=f"Change association (rho={rho:.2f})",
+        xlabel=r"$\|\Delta z(u)\|_2$ z-score",
+        ylabel=r"$\|\Delta\tau\|_2$ z-score",
+    )
+    scatter_axis.grid(alpha=0.18)
+    figure.suptitle(title, fontsize=13)
+    figure.savefig(output, dpi=200, bbox_inches="tight")
     plt.close(figure)
     return output
 

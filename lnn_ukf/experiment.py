@@ -26,11 +26,14 @@ from .analysis import (
     plot_metrics_table,
     plot_noise_adaptation,
     plot_readout_contributions,
+    plot_tau_input_diagnostics,
     plot_tau_trajectory_panel,
     plot_trajectory_comparison,
+    plot_trajectory_comparison_grid,
     tau_intervention_summary,
-    tau_motion_correlation,
     trajectory_metrics,
+    vector_change_comparison,
+    vector_feature_spearman_correlation,
 )
 from .data import TrajectoryData, load_npz_dataset, make_synthetic_underwater_data, save_npz_dataset, split_by_trajectory
 from .filters import FilterResult, run_classical_filter
@@ -306,6 +309,42 @@ def _bootstrap_summary(metrics: pd.DataFrame, seed: int = 0, draws: int = 2000) 
     return pd.DataFrame(rows)
 
 
+def _tau_input_features(
+    prediction: Mapping[str, np.ndarray],
+    test_data: TrajectoryData,
+    position_scale: float,
+) -> tuple[np.ndarray, list[str]]:
+    """Build causal LNN inputs plus interpretable kinematic descriptors.
+
+    The liquid cell directly receives control east/north increments and the
+    previous filtered position.  Speed and continuous heading are deterministic
+    descriptors of those controls, included so the resulting correlation matrix
+    covers the navigation quantities used in scientific interpretation.
+    """
+    controls = test_data.controls
+    heading = np.unwrap(np.arctan2(controls[..., 1], controls[..., 0]), axis=1)
+    speed = np.linalg.norm(controls, axis=-1) / test_data.dt
+    previous_position = prediction["positions"][:, :-1] / position_scale
+    features = np.concatenate(
+        (
+            controls,
+            speed[..., None],
+            heading[..., None],
+            previous_position,
+        ),
+        axis=-1,
+    )
+    names = [
+        "control_east_m",
+        "control_north_m",
+        "speed_m_per_s",
+        "heading_rad",
+        "filtered_east_scaled",
+        "filtered_north_scaled",
+    ]
+    return features, names
+
+
 def _interpretability_outputs(
     model: LNNUKF,
     prediction: Mapping[str, np.ndarray],
@@ -314,7 +353,7 @@ def _interpretability_outputs(
     device: str,
     tau_overlap_epsilon: float,
     tau_grid_size: float,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float]]:
     """Run tau interventions and record auditable internal/external diagnostics."""
     output_directory.mkdir(parents=True, exist_ok=True)
     baseline = prediction["positions"]
@@ -331,18 +370,28 @@ def _interpretability_outputs(
     )
 
     tau = prediction["tau"]
-    deltas = np.diff(test_data.states, axis=1)
-    heading = np.unwrap(np.arctan2(deltas[..., 1], deltas[..., 0]), axis=1)
-    turning_rate = np.abs(np.diff(heading, axis=1, prepend=heading[:, :1]))
-    correlation = tau_motion_correlation(tau, turning_rate)
+    tau_inputs, input_names = _tau_input_features(
+        prediction,
+        test_data,
+        position_scale=model.config.position_scale,
+    )
+    correlation = vector_feature_spearman_correlation(
+        tau,
+        tau_inputs,
+        feature_names=input_names,
+        vector_names=[f"tau_{index}" for index in range(tau.shape[-1])],
+    )
+    change_comparison = vector_change_comparison(tau, tau_inputs)
 
     process_trace = np.trace(prediction["process_covariances"], axis1=-2, axis2=-1)
     measurement_trace = np.trace(prediction["measurement_covariances"][:, 1:], axis1=-2, axis2=-1)
     innovation_norm = np.linalg.norm(np.nan_to_num(prediction["innovations"][:, 1:], nan=0.0), axis=-1)
-    noise_correlation = tau_motion_correlation(
-        np.stack((process_trace, measurement_trace), axis=-1), innovation_norm
-    ).rename(columns={"hidden_unit": "quantity_index"})
-    noise_correlation.insert(0, "quantity", ["trace_Q", "trace_R"])
+    noise_correlation = vector_feature_spearman_correlation(
+        np.stack((process_trace, measurement_trace), axis=-1),
+        innovation_norm[..., None],
+        feature_names=["innovation_norm"],
+        vector_names=["trace_Q", "trace_R"],
+    ).rename(columns={"vector_component": "quantity"})
 
     # Exact readout closure: sum_i A[:,i] h_i + b equals the affine residual.
     hidden = prediction["hidden"][:, 1:]
@@ -373,6 +422,11 @@ def _interpretability_outputs(
         counterfactuals={scale: value for scale, value in counterfactuals.items() if scale != 1.0},
         truth=test_data.states,
     )
+    plot_tau_input_diagnostics(
+        correlation,
+        change_comparison,
+        output_directory / "tau_input_diagnostics.png",
+    )
     plot_readout_contributions(contributions, output_directory / "readout_contributions.png")
     plot_noise_adaptation(
         prediction["process_covariances"],
@@ -386,7 +440,7 @@ def _interpretability_outputs(
         "minimum_position_covariance_eigenvalue": smallest_eigenvalue,
         "orthogonality_frobenius_error": float(prediction["orthogonality_error"]),
     }
-    return intervention, correlation, noise_correlation, diagnostics
+    return intervention, correlation, change_comparison, noise_correlation, diagnostics
 
 
 def _run_single_seed(
@@ -447,6 +501,11 @@ def _run_single_seed(
     if seed == config.seeds[0]:
         figures = output_directory / "figures"
         plot_trajectory_comparison(test_data.states, main_predictions, figures / "trajectory_comparison.png", test_data.beacons)
+        plot_trajectory_comparison_grid(
+            test_data.states,
+            main_predictions,
+            figures / "trajectory_comparison_six.png",
+        )
         plot_metrics_table(metrics, figures / "metrics_comparison.png")
         full_nees = nees(full_prediction["positions"] - test_data.states, full_prediction["position_covariances"])
         plot_covariance_calibration(
@@ -457,7 +516,7 @@ def _run_single_seed(
             measurement_dimension=test_data.measurement_dim,
             title="LNN+UKF uncertainty calibration",
         )
-        intervention, correlation, noise_correlation, diagnostics = _interpretability_outputs(
+        intervention, correlation, change_comparison, noise_correlation, diagnostics = _interpretability_outputs(
             full_model,
             full_prediction,
             test_data,
@@ -467,7 +526,8 @@ def _run_single_seed(
             config.tau_grid_size,
         )
         intervention.to_csv(output_directory / "tau_interventions.csv", index=False)
-        correlation.to_csv(output_directory / "tau_motion_correlation.csv", index=False)
+        correlation.to_csv(output_directory / "tau_input_spearman.csv", index=False)
+        change_comparison.to_csv(output_directory / "tau_input_change_comparison.csv", index=False)
         noise_correlation.to_csv(output_directory / "noise_adaptation_correlation.csv", index=False)
         (output_directory / "interpretability_diagnostics.json").write_text(json.dumps(diagnostics, indent=2), encoding="utf-8")
 
@@ -534,8 +594,9 @@ through a documented preprocessing step.
 - LNN+UKF uses hidden-state sigma points, causal innovation-history Q/R LSTMs,
   nonlinear range updates, and hidden covariance feedback via cross-covariance.
 - Tau interventions are in-model counterfactuals, not claims of a physical
-  intervention on an AUV.  See `tau_interventions.csv` and
-  `tau_motion_correlation.csv`.
+  intervention on an AUV.  The complete tau-vector/input-feature Spearman
+  matrix and aligned vector-change data are in `tau_input_spearman.csv` and
+  `tau_input_change_comparison.csv`.
 
 Configuration:
 

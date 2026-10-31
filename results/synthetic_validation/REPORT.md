@@ -42,8 +42,9 @@ through a documented preprocessing step.
 - LNN+UKF uses hidden-state sigma points, causal innovation-history Q/R LSTMs,
   nonlinear range updates, and hidden covariance feedback via cross-covariance.
 - Tau interventions are in-model counterfactuals, not claims of a physical
-  intervention on an AUV.  See `tau_interventions.csv` and
-  `tau_motion_correlation.csv`.
+  intervention on an AUV.  The complete tau-vector/input-feature Spearman
+  matrix and aligned vector-change data are in `tau_input_spearman.csv` and
+  `tau_input_change_comparison.csv`.
 
 Configuration:
 

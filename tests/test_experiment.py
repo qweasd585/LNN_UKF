@@ -21,3 +21,7 @@ def test_tiny_end_to_end_experiment_writes_auditable_artifacts(tmp_path) -> None
     assert artifacts["report"].is_file()
     assert artifacts["metrics"].is_file()
     assert (artifacts["figures"] / "tau_trajectory_interventions.png").is_file()
+    assert (artifacts["figures"] / "tau_input_diagnostics.png").is_file()
+    assert (artifacts["figures"] / "trajectory_comparison_six.png").is_file()
+    assert (tmp_path / "results" / "tau_input_spearman.csv").is_file()
+    assert (tmp_path / "results" / "tau_input_change_comparison.csv").is_file()
