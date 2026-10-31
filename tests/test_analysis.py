@@ -11,6 +11,7 @@ from lnn_ukf.analysis import (
     plot_tau_input_lag_diagnostics,
     plot_tau_input_vector_norms_grid,
     plot_trajectory_comparison_grid,
+    readout_heatmap_combination_similarity,
     summarize_lagged_spearman,
     readout_input_spearman_correlation,
     tau_intervention_summary,
@@ -97,11 +98,14 @@ def test_lagged_tau_input_and_readout_input_diagnostics(tmp_path) -> None:
     assert image.is_file() and image.stat().st_size > 0
 
     contributions = np.zeros((3, 4, 2, 2))
-    contributions[:, :, 0, 0] = 1.0
-    contributions[0, :, 1, 1] = 1.0
-    contributions[1, :, 1, 1] = -1.0
-    contributions[2, :, 1, 0] = 1.0
     inputs = np.tile(np.array([0.0, 1.0, -1.0, 2.0])[None, :, None], (3, 1, 1))
+    feature_values = inputs[:, :, 0]
+    contributions[:, :, 0, 0] = feature_values
+    contributions[:, :, 0, 1] = -feature_values
+    contributions[0, :, 1, 0] = feature_values[0] ** 2
+    contributions[1, :, 1, 0] = -feature_values[1] ** 2
+    contributions[2, :, 1, 0] = 0.5 * feature_values[2] + feature_values[2] ** 2
+    contributions[:, :, 1, 1] = feature_values
     readout_correlation = readout_input_spearman_correlation(
         contributions,
         inputs,
@@ -109,6 +113,10 @@ def test_lagged_tau_input_and_readout_input_diagnostics(tmp_path) -> None:
     )
     assert readout_correlation.shape[0] == 12
     assert set(readout_correlation["output_component"]) == {"east", "north"}
+    heatmap_similarity = readout_heatmap_combination_similarity(readout_correlation)
+    assert heatmap_similarity.shape[0] == 4  # C(3,2) + C(3,3)
+    assert set(heatmap_similarity["trajectory_count"]) == {2, 3}
+    assert (heatmap_similarity["heatmap_cell_count"] == 4).all()
     correlation_image = plot_readout_input_spearman_grid(
         readout_correlation, tmp_path / "readout_input.png"
     )

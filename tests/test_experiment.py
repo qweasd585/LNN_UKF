@@ -30,3 +30,4 @@ def test_tiny_end_to_end_experiment_writes_auditable_artifacts(tmp_path) -> None
     assert (tmp_path / "results" / "tau_input_vector_norms_by_trajectory.csv").is_file()
     assert (tmp_path / "results" / "tau_input_delay_summary.csv").is_file()
     assert (tmp_path / "results" / "readout_input_spearman_by_trajectory.csv").is_file()
+    assert (tmp_path / "results" / "readout_heatmap_similarity_combinations.csv").is_file()

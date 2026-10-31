@@ -127,7 +127,7 @@ np.savez_compressed(
    \[
    Ah_t+b=\sum_i c_i(t)+b.
    \]
-   对每条轨迹、每个单元的东向和北向贡献分量，分别与全部输入时间序列计算 Spearman 相关；两个序列使用相同的时间长度。结果在 `readout_input_spearman_by_trajectory.csv`，六轨迹热图为 `readout_input_spearman_six.png`。
+   对每条轨迹、每个单元的东向和北向贡献分量，分别与全部输入时间序列计算 Spearman 相关；两个序列使用相同的时间长度。结果在 `readout_input_spearman_by_trajectory.csv`，六轨迹热图为 `readout_input_spearman_six.png`。`readout_heatmap_similarity_combinations.csv` 列出六幅热图全部 57 个两至六轨迹组合：每项汇总组合内热图向量的两两余弦相似度和 Spearman 秩相关的均值、最小值与标准差。每幅图使用相同的 48 个“单元 × 东/北分量 × 输入”单元格；余弦保留符号和幅值模式，秩相关衡量各单元格相对强弱的一致性。
 5. **协方差闭环与校准**：记录 (|AP_hA^\top-P_x\|_F/\|P_x\|_F)、最小特征值、NEES、NIS 和覆盖率。`lnn_ukf_calibration.png` 只展示实际运行产生的分布。
 6. **动态噪声是否有意义**：画出 `tr(Q_t)`、`tr(R_t)` 与新息范数，并报告二者与新息的 Spearman 相关；结果在 `adaptive_noise_diagnostics.png` 与 `noise_adaptation_correlation.csv`。
 

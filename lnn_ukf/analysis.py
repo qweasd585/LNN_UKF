@@ -8,6 +8,7 @@ plots can be regenerated from saved ``.npz`` results without importing a model.
 from __future__ import annotations
 
 import os
+from itertools import combinations
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -316,6 +317,77 @@ def readout_input_spearman_correlation(
                             "n": int((np.isfinite(contribution) & np.isfinite(input_series)).sum()),
                         }
                     )
+    return pd.DataFrame(rows)
+
+
+def readout_heatmap_combination_similarity(correlations: pd.DataFrame) -> pd.DataFrame:
+    """Summarise agreement within every subset of readout-input heatmaps.
+
+    A trajectory heatmap is flattened in its shared ``unit, component, input``
+    layout.  For every combination of two through all available trajectories,
+    the result reports the mean, minimum, and population standard deviation of
+    all within-combination pairwise cosine similarities and Spearman rank
+    correlations.  Cosine similarity keeps sign and magnitude information;
+    Spearman measures agreement in the ordering of the cells.
+    """
+    required = {
+        "trajectory_index",
+        "hidden_unit",
+        "output_component",
+        "input_feature",
+        "spearman_rho",
+    }
+    if missing := required - set(correlations.columns):
+        raise ValueError(f"correlations is missing required columns: {sorted(missing)}")
+    coordinate_columns = ["hidden_unit", "output_component", "input_feature"]
+    if correlations.duplicated(["trajectory_index", *coordinate_columns]).any():
+        raise ValueError("each heatmap cell must occur exactly once per trajectory")
+    matrix = (
+        correlations.pivot(
+            index="trajectory_index", columns=coordinate_columns, values="spearman_rho"
+        )
+        .sort_index(axis=0)
+        .sort_index(axis=1)
+    )
+    trajectories = [int(index) for index in matrix.index]
+    if len(trajectories) < 2:
+        raise ValueError("at least two trajectory heatmaps are required")
+
+    pair_metrics: dict[tuple[int, int], tuple[float, float, int]] = {}
+    for left, right in combinations(trajectories, 2):
+        left_values = matrix.loc[left].to_numpy(dtype=float)
+        right_values = matrix.loc[right].to_numpy(dtype=float)
+        valid = np.isfinite(left_values) & np.isfinite(right_values)
+        if int(valid.sum()) < 2:
+            raise ValueError("each heatmap pair needs at least two finite aligned cells")
+        left_valid = left_values[valid]
+        right_valid = right_values[valid]
+        denominator = np.linalg.norm(left_valid) * np.linalg.norm(right_valid)
+        cosine = float(np.dot(left_valid, right_valid) / denominator) if denominator > 1.0e-12 else float("nan")
+        rank_correlation, _ = _finite_spearman(left_valid, right_valid)
+        pair_metrics[(left, right)] = (cosine, rank_correlation, int(valid.sum()))
+
+    rows: list[dict[str, float | int | str]] = []
+    for size in range(2, len(trajectories) + 1):
+        for subset in combinations(trajectories, size):
+            metrics = [pair_metrics[pair] for pair in combinations(subset, 2)]
+            cosine_values = np.asarray([value[0] for value in metrics], dtype=float)
+            rank_values = np.asarray([value[1] for value in metrics], dtype=float)
+            cell_counts = np.asarray([value[2] for value in metrics], dtype=int)
+            rows.append(
+                {
+                    "trajectory_count": size,
+                    "trajectory_indices": ",".join(str(index) for index in subset),
+                    "pair_count": len(metrics),
+                    "heatmap_cell_count": int(cell_counts.min()),
+                    "mean_pairwise_cosine_similarity": float(np.nanmean(cosine_values)),
+                    "minimum_pairwise_cosine_similarity": float(np.nanmin(cosine_values)),
+                    "std_pairwise_cosine_similarity": float(np.nanstd(cosine_values)),
+                    "mean_pairwise_spearman_rho": float(np.nanmean(rank_values)),
+                    "minimum_pairwise_spearman_rho": float(np.nanmin(rank_values)),
+                    "std_pairwise_spearman_rho": float(np.nanstd(rank_values)),
+                }
+            )
     return pd.DataFrame(rows)
 
 

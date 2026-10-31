@@ -32,6 +32,7 @@ from .analysis import (
     plot_tau_trajectory_panel,
     plot_trajectory_comparison,
     plot_trajectory_comparison_grid,
+    readout_heatmap_combination_similarity,
     tau_intervention_summary,
     trajectory_metrics,
     readout_input_spearman_correlation,
@@ -480,6 +481,7 @@ def _interpretability_outputs(
         readout_input_correlation,
         output_directory / "readout_input_spearman_six.png",
     )
+    heatmap_similarity = readout_heatmap_combination_similarity(readout_input_correlation)
     plot_tau_input_lag_diagnostics(
         lag_summary,
         delay_summary,
@@ -512,6 +514,7 @@ def _interpretability_outputs(
         "delay_summary": delay_summary,
         "selected_trajectories": selected_trajectories,
         "readout_input_correlation": readout_input_correlation,
+        "heatmap_similarity": heatmap_similarity,
         "noise_correlation": noise_correlation,
     }
     return tables, diagnostics
@@ -611,6 +614,7 @@ def _run_single_seed(
             "tau_input_delay_summary.csv": "delay_summary",
             "selected_interpretability_trajectories.csv": "selected_trajectories",
             "readout_input_spearman_by_trajectory.csv": "readout_input_correlation",
+            "readout_heatmap_similarity_combinations.csv": "heatmap_similarity",
             "noise_adaptation_correlation.csv": "noise_correlation",
         }
         for filename, table_name in output_tables.items():
