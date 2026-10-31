@@ -246,6 +246,7 @@ def tau_motion_correlation(tau: Array, motion_statistic: Array) -> pd.DataFrame:
 def tau_intervention_summary(
     baseline: Array,
     counterfactuals: Mapping[float, Array],
+    truth: Array | None = None,
     epsilon: float = 1.0,
     grid_size: float = 1.0,
 ) -> pd.DataFrame:
@@ -253,10 +254,18 @@ def tau_intervention_summary(
 
     The key ``scale`` convention is intentionally left to the caller (for
     example 0.5, 1.0, 1.5 for multiplicative interventions).  The returned
-    table supports a dose-response plot without making causal claims beyond the
-    explicit in-model intervention.
+    table separates two questions: how an intervention changes the full
+    dynamic-tau prediction, and (when ``truth`` is given) how accurately each
+    intervened prediction follows the true trajectory.
     """
     baseline_b = _batched_trajectory(baseline, "baseline")
+    truth_b = None
+    if truth is not None:
+        truth_b = _batched_trajectory(truth, "truth")
+        if truth_b.shape != baseline_b.shape:
+            raise ValueError(
+                f"truth shape {truth_b.shape} does not match baseline shape {baseline_b.shape}"
+            )
     rows: list[dict[str, float]] = []
     for scale, trajectory in sorted(counterfactuals.items(), key=lambda item: item[0]):
         trajectory_b = _batched_trajectory(trajectory, f"counterfactuals[{scale}]")
@@ -265,15 +274,21 @@ def tau_intervention_summary(
                 f"counterfactuals[{scale}] shape {trajectory_b.shape} does not match {baseline_b.shape}"
             )
         displacement = np.linalg.norm(trajectory_b - baseline_b, axis=-1)
-        rows.append(
-            {
-                "tau_scale": float(scale),
-                "mean_displacement": float(np.nanmean(displacement)),
-                "final_displacement": float(np.nanmean(displacement[:, -1])),
-                "time_aligned_overlap": time_aligned_overlap(baseline_b, trajectory_b, epsilon),
-                "occupancy_iou": occupancy_iou(baseline_b, trajectory_b, grid_size),
-            }
-        )
+        row: dict[str, float] = {
+            "tau_scale": float(scale),
+            "mean_displacement_from_dynamic_tau": float(np.nanmean(displacement)),
+            "final_displacement_from_dynamic_tau": float(np.nanmean(displacement[:, -1])),
+            "time_aligned_overlap_with_dynamic_tau": time_aligned_overlap(
+                baseline_b, trajectory_b, epsilon
+            ),
+            "occupancy_iou_with_dynamic_tau": occupancy_iou(
+                baseline_b, trajectory_b, grid_size
+            ),
+        }
+        if truth_b is not None:
+            for metric, value in trajectory_metrics(trajectory_b, truth_b).items():
+                row[f"{metric}_to_truth"] = value
+        rows.append(row)
     return pd.DataFrame(rows)
 
 

@@ -325,6 +325,7 @@ def _interpretability_outputs(
     intervention = tau_intervention_summary(
         baseline,
         counterfactuals,
+        truth=test_data.states,
         epsilon=tau_overlap_epsilon,
         grid_size=tau_grid_size,
     )
