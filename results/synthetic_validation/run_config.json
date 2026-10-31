@@ -1,0 +1,34 @@
+{
+  "output_dir": "/workspace/LNN_UKF/results/synthetic_validation",
+  "data_path": null,
+  "seeds": [
+    7
+  ],
+  "data_seed": 101,
+  "synthetic_trajectories": 30,
+  "synthetic_steps": 40,
+  "hidden_dim": 4,
+  "epochs": 20,
+  "ablation_epochs": 8,
+  "batch_size": 6,
+  "learning_rate": 0.002,
+  "device": "cpu",
+  "run_ablations": true,
+  "save_models": false,
+  "tau_overlap_epsilon": 0.1,
+  "tau_grid_size": 0.5,
+  "filter_q_candidates": [
+    0.0025,
+    0.01,
+    0.025,
+    0.05,
+    0.1
+  ],
+  "filter_r_candidates": [
+    0.04,
+    0.09,
+    0.16,
+    0.25,
+    0.49
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "readout_closure_max_abs_error": 1.4901161193847656e-08,
+  "mean_covariance_projection_relative_error": 0.018775861710309982,
+  "minimum_position_covariance_eigenvalue": 0.144592747092247,
+  "orthogonality_frobenius_error": 2.6656007889869215e-07
+}
