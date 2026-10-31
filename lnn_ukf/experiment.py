@@ -28,8 +28,8 @@ from .analysis import (
     plot_noise_adaptation,
     plot_readout_contributions,
     plot_readout_role_consistency,
-    plot_tau_input_diagnostics,
     plot_tau_input_lag_diagnostics,
+    plot_tau_input_vector_norms_grid,
     plot_tau_trajectory_panel,
     plot_trajectory_comparison,
     plot_trajectory_comparison_grid,
@@ -37,6 +37,7 @@ from .analysis import (
     trajectory_metrics,
     vector_change_comparison,
     vector_feature_spearman_correlation,
+    vector_norm_comparison,
     summarize_lagged_spearman,
     summarize_readout_roles,
 )
@@ -397,6 +398,10 @@ def _interpretability_outputs(
             "trajectory_index": selected_indices,
         }
     )
+    norm_comparison = vector_norm_comparison(tau[selected_indices], tau_inputs[selected_indices])
+    norm_comparison["trajectory_index"] = norm_comparison["trajectory_index"].map(
+        dict(enumerate(selected_indices))
+    ).astype(int)
     per_trajectory_correlations: list[pd.DataFrame] = []
     for trajectory_index in selected_indices:
         trajectory_correlation = vector_feature_spearman_correlation(
@@ -407,14 +412,6 @@ def _interpretability_outputs(
         )
         trajectory_correlation.insert(0, "trajectory_index", int(trajectory_index))
         per_trajectory_correlations.append(trajectory_correlation)
-        trajectory_changes = vector_change_comparison(tau[trajectory_index], tau_inputs[trajectory_index])
-        trajectory_changes["trajectory_index"] = int(trajectory_index)
-        plot_tau_input_diagnostics(
-            trajectory_correlation,
-            trajectory_changes,
-            output_directory / f"tau_input_diagnostics_trajectory_{trajectory_index + 1:02d}.png",
-            title=f"Trajectory {trajectory_index + 1}: tau vector and inputs",
-        )
     correlation_by_trajectory = pd.concat(per_trajectory_correlations, ignore_index=True)
     lag_limit = min(max(int(tau_lag_max_steps), 0), max(tau.shape[1] - 4, 0))
     lagged_correlation = lagged_vector_feature_spearman(
@@ -468,18 +465,11 @@ def _interpretability_outputs(
         counterfactuals={scale: value for scale, value in counterfactuals.items() if scale != 1.0},
         truth=test_data.states,
     )
-    plot_tau_input_diagnostics(
-        correlation,
-        change_comparison,
-        output_directory / "tau_input_diagnostics.png",
+    plot_tau_input_vector_norms_grid(
+        norm_comparison,
+        output_directory / "tau_input_vector_norms_six.png",
     )
     plot_readout_contributions(contributions, output_directory / "readout_contributions.png")
-    for trajectory_index in selected_indices:
-        plot_readout_contributions(
-            contributions[trajectory_index],
-            output_directory / f"readout_contributions_trajectory_{trajectory_index + 1:02d}.png",
-            title=f"Trajectory {trajectory_index + 1}: internal-unit readout contributions",
-        )
     readout_by_trajectory, readout_role_summary = summarize_readout_roles(contributions[selected_indices])
     readout_by_trajectory["trajectory_index"] = readout_by_trajectory["trajectory_index"].map(
         dict(enumerate(selected_indices))
@@ -513,6 +503,7 @@ def _interpretability_outputs(
         "intervention": intervention,
         "correlation": correlation,
         "change_comparison": change_comparison,
+        "norm_comparison": norm_comparison,
         "correlation_by_trajectory": correlation_by_trajectory,
         "lagged_correlation": lagged_correlation,
         "lag_summary": lag_summary,
@@ -612,6 +603,7 @@ def _run_single_seed(
             "tau_interventions.csv": "intervention",
             "tau_input_spearman.csv": "correlation",
             "tau_input_change_comparison.csv": "change_comparison",
+            "tau_input_vector_norms_by_trajectory.csv": "norm_comparison",
             "tau_input_spearman_by_trajectory.csv": "correlation_by_trajectory",
             "tau_input_lagged_spearman_by_trajectory.csv": "lagged_correlation",
             "tau_input_lagged_spearman_summary.csv": "lag_summary",

@@ -322,6 +322,52 @@ def vector_change_comparison(vector: Array, features: Array) -> pd.DataFrame:
     )
 
 
+def vector_norm_comparison(vector: Array, features: Array) -> pd.DataFrame:
+    """Return raw and within-trajectory standardized norms for two vectors.
+
+    Input coordinates are standardized over the supplied batch before their
+    norm is taken because position, displacement, speed, and heading use
+    different numerical scales.  The z-score columns then make the two norm
+    trajectories directly comparable within each path.
+    """
+    vector_array = np.asarray(vector, dtype=float)
+    feature_array = np.asarray(features, dtype=float)
+    if vector_array.ndim == 2:
+        vector_array = vector_array[None, ...]
+    if feature_array.ndim == 2:
+        feature_array = feature_array[None, ...]
+    if vector_array.ndim != 3 or feature_array.ndim != 3:
+        raise ValueError("vector and features must have shape [T, D] or [N, T, D]")
+    if vector_array.shape[:2] != feature_array.shape[:2]:
+        raise ValueError("vector and features must have matching [N, T] prefixes")
+
+    feature_flat = feature_array.reshape(-1, feature_array.shape[-1])
+    feature_means = np.nanmean(feature_flat, axis=0)
+    feature_scales = np.nanstd(feature_flat, axis=0)
+    feature_scales = np.where(feature_scales > 1.0e-12, feature_scales, 1.0)
+    standardized_features = (feature_array - feature_means) / feature_scales
+    vector_norm = np.linalg.norm(vector_array, axis=-1)
+    input_norm = np.linalg.norm(standardized_features, axis=-1)
+
+    def _per_trajectory_zscore(values: Array) -> Array:
+        means = np.nanmean(values, axis=1, keepdims=True)
+        scales = np.nanstd(values, axis=1, keepdims=True)
+        scales = np.where(scales > 1.0e-12, scales, 1.0)
+        return (values - means) / scales
+
+    trajectories, time_steps = vector_norm.shape
+    return pd.DataFrame(
+        {
+            "trajectory_index": np.repeat(np.arange(trajectories), time_steps),
+            "time_index": np.tile(np.arange(time_steps), trajectories),
+            "tau_vector_l2": vector_norm.reshape(-1),
+            "input_vector_standardized_l2": input_norm.reshape(-1),
+            "tau_vector_norm_zscore": _per_trajectory_zscore(vector_norm).reshape(-1),
+            "input_vector_norm_zscore": _per_trajectory_zscore(input_norm).reshape(-1),
+        }
+    )
+
+
 def lagged_vector_feature_spearman(
     vector: Array,
     features: Array,
@@ -818,6 +864,74 @@ def plot_tau_input_diagnostics(
         )
         scatter_axis.grid(alpha=0.18)
     figure.suptitle(title, fontsize=13)
+    figure.savefig(output, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    return output
+
+
+def plot_tau_input_vector_norms_grid(
+    norm_comparison: pd.DataFrame,
+    path: str | Path,
+    title: str = "Tau-vector and input-vector norm changes",
+) -> Path:
+    """Plot standardized tau/input norm trajectories for up to six paths."""
+    required = {
+        "trajectory_index",
+        "time_index",
+        "tau_vector_norm_zscore",
+        "input_vector_norm_zscore",
+    }
+    if missing := required - set(norm_comparison.columns):
+        raise ValueError(f"norm_comparison is missing required columns: {sorted(missing)}")
+    trajectories = list(dict.fromkeys(norm_comparison["trajectory_index"].astype(int)))
+    if not trajectories:
+        raise ValueError("norm_comparison must contain at least one trajectory")
+    if len(trajectories) > 6:
+        raise ValueError("norm_comparison must contain at most six trajectories")
+    output = _prepare_path(path)
+    figure, axes = plt.subplots(2, 3, figsize=(13.0, 8.4))
+    axes_flat = axes.ravel()
+    handles: list[plt.Line2D] = []
+    for panel, trajectory_index in enumerate(trajectories):
+        axis = axes_flat[panel]
+        frame = norm_comparison[norm_comparison["trajectory_index"] == trajectory_index].sort_values("time_index")
+        tau_line, = axis.plot(
+            frame["time_index"],
+            frame["tau_vector_norm_zscore"],
+            color="#d62728",
+            linewidth=2.0,
+            label=r"$\|\tau(t)\|_2$",
+        )
+        input_line, = axis.plot(
+            frame["time_index"],
+            frame["input_vector_norm_zscore"],
+            color="#1f77b4",
+            linewidth=2.0,
+            label=r"$\|z(u(t))\|_2$",
+        )
+        if panel == 0:
+            handles = [tau_line, input_line]
+        axis.axhline(0.0, color="black", linewidth=0.7, alpha=0.40)
+        axis.set_title(f"Trajectory {trajectory_index + 1}", fontsize=10)
+        axis.grid(alpha=0.20)
+        axis.tick_params(labelsize=8)
+        if panel % 3 == 0:
+            axis.set_ylabel("within-trajectory z-score", fontsize=9)
+        if panel >= 3:
+            axis.set_xlabel("Time step", fontsize=9)
+    for axis in axes_flat[len(trajectories) :]:
+        axis.set_visible(False)
+    figure.legend(
+        handles,
+        [r"$\|\tau(t)\|_2$", r"$\|z(u(t))\|_2$"],
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.955),
+        ncol=2,
+        frameon=False,
+        fontsize=9,
+    )
+    figure.suptitle(title, fontsize=13, y=0.985)
+    figure.subplots_adjust(left=0.07, right=0.985, bottom=0.08, top=0.86, wspace=0.20, hspace=0.28)
     figure.savefig(output, dpi=200, bbox_inches="tight")
     plt.close(figure)
     return output

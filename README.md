@@ -61,7 +61,7 @@ python -m venv .venv
   --threads 4 --output results/synthetic_multiseed
 ```
 
-执行结束后，`REPORT.md` 只汇总本次实际产生的数值；`metrics_summary.csv` 与 `ablation_metrics_summary.csv` 提供每航迹 bootstrap 95% CI；`figures/` 保存轨迹、误差、校准、液态时间常数和内部节点贡献图。`trajectory_comparison_six.png` 使用六条局部裁切轨迹叠加全部模型，不纳入远处锚点；每条选中轨迹都生成独立的读出贡献图和 tau—输入双面板图。若要在 Excel 中修改字体或颜色，请使用 `tools/csv_to_xlsx.py` 批量转换 CSV，而不要把格式化结果当作算法输出的一部分提交。
+执行结束后，`REPORT.md` 只汇总本次实际产生的数值；`metrics_summary.csv` 与 `ablation_metrics_summary.csv` 提供每航迹 bootstrap 95% CI；`figures/` 保存轨迹、误差、校准、液态时间常数和内部节点贡献图。`trajectory_comparison_six.png` 使用六条局部裁切轨迹叠加全部模型，不纳入远处锚点；`tau_input_vector_norms_six.png` 比较六条轨迹的 tau 向量模值和标准化输入向量模值变化。若要在 Excel 中修改字体或颜色，请使用 `tools/csv_to_xlsx.py` 批量转换 CSV，而不要把格式化结果当作算法输出的一部分提交。
 
 ## 接入 LNN_Lack 数据
 
@@ -116,7 +116,7 @@ np.savez_compressed(
 
 运行器会生成以下可量化诊断，而不只展示轨迹图：
 
-1. **完整液态时间向量与完整输入向量**：保存所有单元形成的 \(\tau(t)\in\mathbb{R}^H\)，并与直接输入的控制东/北分量、滤波位置及由控制导出的速度和连续航向角计算完整的两两 Spearman 矩阵，结果在 `tau_input_spearman.csv`。`tau_input_change_comparison.csv` 保存 \(\|\Delta\tau\|_2\) 与标准化 \(\|\Delta z(u)\|_2\) 的对齐变化；`tau_input_diagnostics.png` 仅展示相关热图和变化曲线。六条选中轨迹分别输出 `tau_input_diagnostics_trajectory_*.png`，对应明细在 `tau_input_spearman_by_trajectory.csv`。
+1. **完整液态时间向量与完整输入向量**：保存所有单元形成的 \(\tau(t)\in\mathbb{R}^H\)，并与直接输入的控制东/北分量、滤波位置及由控制导出的速度和连续航向角计算完整的两两 Spearman 矩阵，结果在 `tau_input_spearman.csv`。`tau_input_change_comparison.csv` 保存 \(\|\Delta\tau\|_2\) 与标准化 \(\|\Delta z(u)\|_2\) 的对齐变化；`tau_input_vector_norms_six.png` 展示六条轨迹的向量模值变化，原始模值和逐轨迹 z-score 在 `tau_input_vector_norms_by_trajectory.csv`。逐轨迹 Spearman 明细保留在 `tau_input_spearman_by_trajectory.csv`。
 2. **输入到 tau 的时间滞后**：对每条选中轨迹计算 \(\rho_{ij}(\ell)=\operatorname{Spearman}(\Delta\tau_i(t),\Delta u_j(t-\ell))\)。正 \(\ell\) 表示输入变化先于 tau 变化；完整结果、跨轨迹汇总和峰值延迟分别在 `tau_input_lagged_spearman_by_trajectory.csv`、`tau_input_lagged_spearman_summary.csv`、`tau_input_delay_summary.csv`，图为 `tau_input_lag_diagnostics.png`。仅当跨轨迹平均峰值 \(|\rho|\ge0.20\) 时标记方向，否则为 `no_clear_lag`。该分析量化时序关联，不能单独证明因果关系。
 3. **(\tau) 干预与真实轨迹**：固定输入、初始值和量测，将全部动态 \(\tau(t)\) 乘以 \(0.5,0.75,1,1.25,1.5\)，在 `tau_interventions.csv` 中同时报告相对真实轨迹的 RMSE、MAE、ADE、FDE，以及相对未干预动态 \(\tau(t)\) 的平均/末端偏离、时间对齐重合率
    \[
@@ -127,7 +127,7 @@ np.savez_compressed(
    \[
    Ah_t+b=\sum_i c_i(t)+b.
    \]
-   每条选中轨迹输出 `readout_contributions_trajectory_*.png`。`readout_role_consistency.csv` 使用时间均值有符号贡献向量的跨轨迹两两余弦和平均贡献幅值变异系数，判定 `consistent`、`trajectory_dependent` 或 `weak`；图为 `readout_role_consistency.png`。
+   `readout_contributions.png` 展示各单元贡献模值。`readout_role_consistency.csv` 使用时间均值有符号贡献向量的跨轨迹两两余弦和平均贡献幅值变异系数，判定 `consistent`、`trajectory_dependent` 或 `weak`；图为 `readout_role_consistency.png`。
 5. **协方差闭环与校准**：记录 (|AP_hA^\top-P_x\|_F/\|P_x\|_F)、最小特征值、NEES、NIS 和覆盖率。`lnn_ukf_calibration.png` 只展示实际运行产生的分布。
 6. **动态噪声是否有意义**：画出 `tr(Q_t)`、`tr(R_t)` 与新息范数，并报告二者与新息的 Spearman 相关；结果在 `adaptive_noise_diagnostics.png` 与 `noise_adaptation_correlation.csv`。
 

@@ -9,6 +9,7 @@ from lnn_ukf.analysis import (
     plot_readout_role_consistency,
     plot_tau_input_diagnostics,
     plot_tau_input_lag_diagnostics,
+    plot_tau_input_vector_norms_grid,
     plot_trajectory_comparison_grid,
     summarize_lagged_spearman,
     summarize_readout_roles,
@@ -17,6 +18,7 @@ from lnn_ukf.analysis import (
     trajectory_metrics,
     vector_change_comparison,
     vector_feature_spearman_correlation,
+    vector_norm_comparison,
 )
 
 
@@ -62,6 +64,10 @@ def test_vector_input_correlation_and_compact_trajectory_grid(tmp_path) -> None:
     assert len(changes) == 3
     diagnostic = plot_tau_input_diagnostics(correlation, changes, tmp_path / "tau_input.png")
     assert diagnostic.is_file() and diagnostic.stat().st_size > 0
+    norms = vector_norm_comparison(tau, inputs)
+    assert set(norms.columns) >= {"tau_vector_l2", "input_vector_standardized_l2"}
+    norm_image = plot_tau_input_vector_norms_grid(norms, tmp_path / "norms.png")
+    assert norm_image.is_file() and norm_image.stat().st_size > 0
 
     truth = np.stack((np.c_[np.arange(4), np.zeros(4)], np.c_[np.arange(4), np.ones(4)]))
     image = plot_trajectory_comparison_grid(
