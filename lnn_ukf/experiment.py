@@ -26,8 +26,7 @@ from .analysis import (
     plot_covariance_calibration,
     plot_metrics_table,
     plot_noise_adaptation,
-    plot_readout_contributions,
-    plot_readout_role_consistency,
+    plot_readout_input_spearman_grid,
     plot_tau_input_lag_diagnostics,
     plot_tau_input_vector_norms_grid,
     plot_tau_trajectory_panel,
@@ -35,11 +34,11 @@ from .analysis import (
     plot_trajectory_comparison_grid,
     tau_intervention_summary,
     trajectory_metrics,
+    readout_input_spearman_correlation,
     vector_change_comparison,
     vector_feature_spearman_correlation,
     vector_norm_comparison,
     summarize_lagged_spearman,
-    summarize_readout_roles,
 )
 from .data import TrajectoryData, load_npz_dataset, make_synthetic_underwater_data, save_npz_dataset, split_by_trajectory
 from .filters import FilterResult, run_classical_filter
@@ -469,14 +468,17 @@ def _interpretability_outputs(
         norm_comparison,
         output_directory / "tau_input_vector_norms_six.png",
     )
-    plot_readout_contributions(contributions, output_directory / "readout_contributions.png")
-    readout_by_trajectory, readout_role_summary = summarize_readout_roles(contributions[selected_indices])
-    readout_by_trajectory["trajectory_index"] = readout_by_trajectory["trajectory_index"].map(
+    readout_input_correlation = readout_input_spearman_correlation(
+        contributions[selected_indices],
+        tau_inputs[selected_indices],
+        feature_names=input_names,
+    )
+    readout_input_correlation["trajectory_index"] = readout_input_correlation["trajectory_index"].map(
         dict(enumerate(selected_indices))
     ).astype(int)
-    plot_readout_role_consistency(
-        readout_role_summary,
-        output_directory / "readout_role_consistency.png",
+    plot_readout_input_spearman_grid(
+        readout_input_correlation,
+        output_directory / "readout_input_spearman_six.png",
     )
     plot_tau_input_lag_diagnostics(
         lag_summary,
@@ -509,8 +511,7 @@ def _interpretability_outputs(
         "lag_summary": lag_summary,
         "delay_summary": delay_summary,
         "selected_trajectories": selected_trajectories,
-        "readout_by_trajectory": readout_by_trajectory,
-        "readout_role_summary": readout_role_summary,
+        "readout_input_correlation": readout_input_correlation,
         "noise_correlation": noise_correlation,
     }
     return tables, diagnostics
@@ -609,8 +610,7 @@ def _run_single_seed(
             "tau_input_lagged_spearman_summary.csv": "lag_summary",
             "tau_input_delay_summary.csv": "delay_summary",
             "selected_interpretability_trajectories.csv": "selected_trajectories",
-            "readout_contributions_by_trajectory.csv": "readout_by_trajectory",
-            "readout_role_consistency.csv": "readout_role_summary",
+            "readout_input_spearman_by_trajectory.csv": "readout_input_correlation",
             "noise_adaptation_correlation.csv": "noise_correlation",
         }
         for filename, table_name in output_tables.items():

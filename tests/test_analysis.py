@@ -6,13 +6,13 @@ from lnn_ukf.analysis import (
     lagged_vector_feature_spearman,
     occupancy_iou,
     plot_readout_contributions,
-    plot_readout_role_consistency,
+    plot_readout_input_spearman_grid,
     plot_tau_input_diagnostics,
     plot_tau_input_lag_diagnostics,
     plot_tau_input_vector_norms_grid,
     plot_trajectory_comparison_grid,
     summarize_lagged_spearman,
-    summarize_readout_roles,
+    readout_input_spearman_correlation,
     tau_intervention_summary,
     time_aligned_overlap,
     trajectory_metrics,
@@ -78,7 +78,7 @@ def test_vector_input_correlation_and_compact_trajectory_grid(tmp_path) -> None:
     assert image.is_file() and image.stat().st_size > 0
 
 
-def test_lagged_tau_input_and_readout_role_diagnostics(tmp_path) -> None:
+def test_lagged_tau_input_and_readout_input_diagnostics(tmp_path) -> None:
     feature = np.array([0.0, 0.4, -0.3, 0.9, 0.2, 1.1, -0.5, 0.6, 0.1, 0.8])
     feature_change = np.diff(feature)
     tau_change = np.concatenate(([0.2, -0.1], feature_change[:-2]))
@@ -101,8 +101,15 @@ def test_lagged_tau_input_and_readout_role_diagnostics(tmp_path) -> None:
     contributions[0, :, 1, 1] = 1.0
     contributions[1, :, 1, 1] = -1.0
     contributions[2, :, 1, 0] = 1.0
-    _, roles = summarize_readout_roles(contributions)
-    assert roles.loc[roles["hidden_unit"] == 0, "role_label"].iloc[0] == "consistent"
-    assert roles.loc[roles["hidden_unit"] == 1, "role_label"].iloc[0] == "trajectory_dependent"
-    role_image = plot_readout_role_consistency(roles, tmp_path / "roles.png")
-    assert role_image.is_file() and role_image.stat().st_size > 0
+    inputs = np.tile(np.array([0.0, 1.0, -1.0, 2.0])[None, :, None], (3, 1, 1))
+    readout_correlation = readout_input_spearman_correlation(
+        contributions,
+        inputs,
+        feature_names=["speed"],
+    )
+    assert readout_correlation.shape[0] == 12
+    assert set(readout_correlation["output_component"]) == {"east", "north"}
+    correlation_image = plot_readout_input_spearman_grid(
+        readout_correlation, tmp_path / "readout_input.png"
+    )
+    assert correlation_image.is_file() and correlation_image.stat().st_size > 0

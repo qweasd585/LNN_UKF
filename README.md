@@ -123,11 +123,11 @@ np.savez_compressed(
    O_\epsilon=\frac1T\sum_t\mathbf{1}\{\|\hat x_t^{cf}-\hat x_t\|\le\epsilon\}
    \]
    与栅格占据 IoU。重合率和 IoU 用于衡量干预敏感性；定位性能以真实轨迹误差为准。默认合成场景使用 \(\epsilon=0.10\) m 和 0.50 m 栅格；真实数据应按任务允许定位误差预先设定。独立训练的固定 \(\tau\) 消融在 `ablation_metrics_summary.csv` 的 `Fixed tau` 行。见 `tau_interventions.csv` 和 `tau_trajectory_interventions.png`。
-4. **内部节点到位移的闭合与跨轨迹角色**：对每个单元计算 (c_i(t)=A_{:,i}h_i(t))，展示热图并数值检查
+4. **内部节点到位移的闭合与输入关联**：对每个单元计算 (c_i(t)=A_{:,i}h_i(t))，展示热图并数值检查
    \[
    Ah_t+b=\sum_i c_i(t)+b.
    \]
-   `readout_contributions.png` 展示各单元贡献模值。`readout_role_consistency.csv` 使用时间均值有符号贡献向量的跨轨迹两两余弦和平均贡献幅值变异系数，判定 `consistent`、`trajectory_dependent` 或 `weak`；图为 `readout_role_consistency.png`。
+   对每条轨迹、每个单元的东向和北向贡献分量，分别与全部输入时间序列计算 Spearman 相关；两个序列使用相同的时间长度。结果在 `readout_input_spearman_by_trajectory.csv`，六轨迹热图为 `readout_input_spearman_six.png`。
 5. **协方差闭环与校准**：记录 (|AP_hA^\top-P_x\|_F/\|P_x\|_F)、最小特征值、NEES、NIS 和覆盖率。`lnn_ukf_calibration.png` 只展示实际运行产生的分布。
 6. **动态噪声是否有意义**：画出 `tr(Q_t)`、`tr(R_t)` 与新息范数，并报告二者与新息的 Spearman 相关；结果在 `adaptive_noise_diagnostics.png` 与 `noise_adaptation_correlation.csv`。
 

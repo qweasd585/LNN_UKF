@@ -271,6 +271,54 @@ def vector_feature_spearman_correlation(
     return pd.DataFrame(rows)
 
 
+def readout_input_spearman_correlation(
+    contributions: Array,
+    features: Array,
+    feature_names: Sequence[str],
+) -> pd.DataFrame:
+    """Correlate signed east/north unit contributions with each input by path.
+
+    ``contributions`` is ``[N, T, H, 2]`` and contains
+    ``A[:, i] * h_i(t)``.  Each Spearman coefficient therefore uses exactly
+    one trajectory's aligned time series of length ``T``; east and north
+    components remain separate rather than being collapsed to a magnitude.
+    """
+    contribution_array = np.asarray(contributions, dtype=float)
+    feature_array = np.asarray(features, dtype=float)
+    if contribution_array.ndim == 3:
+        contribution_array = contribution_array[None, ...]
+    if feature_array.ndim == 2:
+        feature_array = feature_array[None, ...]
+    if contribution_array.ndim != 4 or contribution_array.shape[-1] != 2:
+        raise ValueError("contributions must have shape [T,H,2] or [N,T,H,2]")
+    if feature_array.ndim != 3 or contribution_array.shape[:2] != feature_array.shape[:2]:
+        raise ValueError("features must have matching shape [N,T,F]")
+    if len(feature_names) != feature_array.shape[-1]:
+        raise ValueError("feature_names length must match the final features dimension")
+
+    rows: list[dict[str, float | int | str]] = []
+    component_names = ("east", "north")
+    for trajectory_index in range(contribution_array.shape[0]):
+        for hidden_unit in range(contribution_array.shape[2]):
+            for component_index, component_name in enumerate(component_names):
+                contribution = contribution_array[trajectory_index, :, hidden_unit, component_index]
+                for feature_index, feature_name in enumerate(feature_names):
+                    input_series = feature_array[trajectory_index, :, feature_index]
+                    correlation, p_value = _finite_spearman(contribution, input_series)
+                    rows.append(
+                        {
+                            "trajectory_index": trajectory_index,
+                            "hidden_unit": hidden_unit,
+                            "output_component": component_name,
+                            "input_feature": str(feature_name),
+                            "spearman_rho": correlation,
+                            "p_value": p_value,
+                            "n": int((np.isfinite(contribution) & np.isfinite(input_series)).sum()),
+                        }
+                    )
+    return pd.DataFrame(rows)
+
+
 def vector_change_comparison(vector: Array, features: Array) -> pd.DataFrame:
     """Measure aligned changes of a state vector and standardized input vector.
 
@@ -932,6 +980,68 @@ def plot_tau_input_vector_norms_grid(
     )
     figure.suptitle(title, fontsize=13, y=0.985)
     figure.subplots_adjust(left=0.07, right=0.985, bottom=0.08, top=0.86, wspace=0.20, hspace=0.28)
+    figure.savefig(output, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    return output
+
+
+def plot_readout_input_spearman_grid(
+    correlations: pd.DataFrame,
+    path: str | Path,
+    title: str = "Signed readout contributions and inputs",
+) -> Path:
+    """Show east/north contribution-input Spearman matrices for six paths."""
+    required = {"trajectory_index", "hidden_unit", "output_component", "input_feature", "spearman_rho"}
+    if missing := required - set(correlations.columns):
+        raise ValueError(f"correlations is missing required columns: {sorted(missing)}")
+    trajectories = list(dict.fromkeys(correlations["trajectory_index"].astype(int)))
+    if not trajectories or len(trajectories) > 6:
+        raise ValueError("correlations must contain between one and six trajectories")
+    units = sorted(correlations["hidden_unit"].unique())
+    components = ["east", "north"]
+    row_order = [(unit, component) for unit in units for component in components]
+    features = list(dict.fromkeys(correlations["input_feature"].astype(str)))
+    output = _prepare_path(path)
+    figure, axes = plt.subplots(2, 3, figsize=(14.0, 9.0))
+    axes_flat = axes.ravel()
+    image = None
+    for panel, trajectory_index in enumerate(trajectories):
+        axis = axes_flat[panel]
+        frame = correlations[correlations["trajectory_index"] == trajectory_index].copy()
+        frame["row_label"] = [
+            f"u{unit} {component[0].upper()}"
+            for unit, component in zip(frame["hidden_unit"], frame["output_component"], strict=True)
+        ]
+        labels = [f"u{unit} {component[0].upper()}" for unit, component in row_order]
+        matrix = (
+            frame.pivot(index="row_label", columns="input_feature", values="spearman_rho")
+            .reindex(index=labels, columns=features)
+            .to_numpy(dtype=float)
+        )
+        image = axis.imshow(matrix, cmap="coolwarm", vmin=-1.0, vmax=1.0, aspect="auto")
+        axis.set_title(f"Trajectory {trajectory_index + 1}", fontsize=10)
+        axis.set_xticks(np.arange(len(features)), features, rotation=35, ha="right", fontsize=7)
+        axis.set_yticks(np.arange(len(labels)), labels, fontsize=7)
+        for row in range(matrix.shape[0]):
+            for column in range(matrix.shape[1]):
+                value = matrix[row, column]
+                if np.isfinite(value):
+                    axis.text(
+                        column,
+                        row,
+                        f"{value:.2f}",
+                        ha="center",
+                        va="center",
+                        fontsize=6,
+                        color="white" if abs(value) > 0.52 else "black",
+                    )
+    for axis in axes_flat[len(trajectories) :]:
+        axis.set_visible(False)
+    assert image is not None
+    color_axis = figure.add_axes((0.92, 0.20, 0.018, 0.60))
+    figure.colorbar(image, cax=color_axis, label="Spearman rho")
+    figure.suptitle(title, fontsize=13, y=0.99)
+    figure.subplots_adjust(left=0.08, right=0.88, bottom=0.08, top=0.93, wspace=0.32, hspace=0.42)
     figure.savefig(output, dpi=200, bbox_inches="tight")
     plt.close(figure)
     return output
