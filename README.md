@@ -61,7 +61,7 @@ python -m venv .venv
   --threads 4 --output results/synthetic_multiseed
 ```
 
-执行结束后，`REPORT.md` 只汇总本次实际产生的数值；`metrics_summary.csv` 与 `ablation_metrics_summary.csv` 提供每航迹 bootstrap 95% CI；`LNN_UKF_results.xlsx` 是可在 Excel 中保存颜色、字体和列宽的工作簿；`figures/` 保存轨迹、误差、校准、液态时间常数和内部节点贡献图。
+执行结束后，`REPORT.md` 只汇总本次实际产生的数值；`metrics_summary.csv` 与 `ablation_metrics_summary.csv` 提供每航迹 bootstrap 95% CI；`figures/` 保存轨迹、误差、校准、液态时间常数和内部节点贡献图。若要在 Excel 中修改字体或颜色，请使用 `tools/csv_to_xlsx.py` 批量转换 CSV，而不要把格式化结果当作算法输出的一部分提交。
 
 ## 接入 LNN_Lack 数据
 

@@ -545,56 +545,6 @@ Configuration:
     path.write_text(text, encoding="utf-8")
 
 
-def export_result_workbook(output_directory: str | Path) -> Path:
-    """Create a formatted Excel workbook from an experiment-result directory.
-
-    CSV remains the machine-readable source of truth.  This workbook is the
-    human-editable companion: Excel can preserve changed font colours, widths,
-    filters, and number formats when it is saved again as ``.xlsx``.
-    """
-    from openpyxl.styles import Alignment, Font, PatternFill
-
-    directory = Path(output_directory)
-    sheets = {
-        "Main per trajectory": "metrics_per_trajectory.csv",
-        "Main summary": "metrics_summary.csv",
-        "Ablation per trajectory": "ablation_metrics_per_trajectory.csv",
-        "Ablation summary": "ablation_metrics_summary.csv",
-        "Calibration": "calibration_summary.csv",
-        "Filter tuning": "classical_filter_validation_tuning.csv",
-        "Tau interventions": "tau_interventions.csv",
-        "Tau correlation": "tau_motion_correlation.csv",
-        "Noise adaptation": "noise_adaptation_correlation.csv",
-    }
-    tables = {
-        sheet_name: pd.read_csv(directory / filename)
-        for sheet_name, filename in sheets.items()
-        if (directory / filename).is_file()
-    }
-    if not tables:
-        raise FileNotFoundError(f"no result CSV files found in {directory}")
-    target = directory / "LNN_UKF_results.xlsx"
-    with pd.ExcelWriter(target, engine="openpyxl") as writer:
-        for sheet_name, table in tables.items():
-            table.to_excel(writer, sheet_name=sheet_name, index=False)
-            worksheet = writer.book[sheet_name]
-            worksheet.freeze_panes = "A2"
-            worksheet.auto_filter.ref = worksheet.dimensions
-            for cell in worksheet[1]:
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill("solid", fgColor="1F4E78")
-                cell.alignment = Alignment(horizontal="center")
-            for column_cells in worksheet.columns:
-                header = column_cells[0].value
-                width = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
-                worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(width + 2, 12), 32)
-                if header not in {"model", "filter", "metric", "quantity"}:
-                    for cell in column_cells[1:]:
-                        if isinstance(cell.value, (float, np.floating)):
-                            cell.number_format = "0.0000"
-    return target
-
-
 def run_experiment(config: ExperimentConfig) -> dict[str, Path]:
     """Run full comparison, ablations, calibration, and interpretation output."""
     if not config.seeds:
@@ -621,15 +571,13 @@ def run_experiment(config: ExperimentConfig) -> dict[str, Path]:
     filter_tuning.to_csv(output_directory / "classical_filter_validation_tuning.csv", index=False)
     (output_directory / "run_config.json").write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
     _write_report(output_directory / "REPORT.md", source_description, config, summary, ablation_summary)
-    workbook = export_result_workbook(output_directory)
     return {
         "output_dir": output_directory,
         "report": output_directory / "REPORT.md",
         "metrics": output_directory / "metrics_summary.csv",
         "ablations": output_directory / "ablation_metrics_summary.csv",
         "figures": output_directory / "figures",
-        "workbook": workbook,
     }
 
 
-__all__ = ["ExperimentConfig", "export_result_workbook", "run_experiment", "tune_classical_filters"]
+__all__ = ["ExperimentConfig", "run_experiment", "tune_classical_filters"]
