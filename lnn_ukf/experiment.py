@@ -20,26 +20,20 @@ import torch
 
 from .analysis import (
     consistency_summary,
-    lagged_vector_feature_spearman,
     nees,
     per_trajectory_metrics,
     plot_covariance_calibration,
     plot_metrics_table,
     plot_noise_adaptation,
     plot_readout_input_spearman_grid,
-    plot_tau_input_lag_diagnostics,
-    plot_tau_input_vector_norms_grid,
-    plot_tau_trajectory_panel,
+    plot_tau_true_displacement_grid,
     plot_trajectory_comparison,
     plot_trajectory_comparison_grid,
     readout_heatmap_combination_similarity,
-    tau_intervention_summary,
     trajectory_metrics,
     readout_input_spearman_correlation,
-    vector_change_comparison,
     vector_feature_spearman_correlation,
-    vector_norm_comparison,
-    summarize_lagged_spearman,
+    tau_true_displacement_comparison,
 )
 from .data import TrajectoryData, load_npz_dataset, make_synthetic_underwater_data, save_npz_dataset, split_by_trajectory
 from .filters import FilterResult, run_classical_filter
@@ -73,9 +67,6 @@ class ExperimentConfig:
     device: str = "cpu"
     run_ablations: bool = True
     save_models: bool = True
-    tau_overlap_epsilon: float = 0.10
-    tau_grid_size: float = 0.50
-    tau_lag_max_steps: int = 8
     filter_q_candidates: tuple[float, ...] = (0.0025, 0.01, 0.025, 0.05, 0.10)
     filter_r_candidates: tuple[float, ...] = (0.04, 0.09, 0.16, 0.25, 0.49)
 
@@ -316,7 +307,7 @@ def _bootstrap_summary(metrics: pd.DataFrame, seed: int = 0, draws: int = 2000) 
     return pd.DataFrame(rows)
 
 
-def _tau_input_features(
+def _readout_input_features(
     prediction: Mapping[str, np.ndarray],
     test_data: TrajectoryData,
     position_scale: float,
@@ -357,39 +348,15 @@ def _interpretability_outputs(
     prediction: Mapping[str, np.ndarray],
     test_data: TrajectoryData,
     output_directory: Path,
-    device: str,
-    tau_overlap_epsilon: float,
-    tau_grid_size: float,
-    tau_lag_max_steps: int,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, float]]:
-    """Run tau interventions and record auditable internal/external diagnostics."""
+    """Record the requested tau/true-motion and readout diagnostics."""
     output_directory.mkdir(parents=True, exist_ok=True)
-    baseline = prediction["positions"]
-    counterfactuals = {
-        scale: predict_lnn_ukf(model, test_data, device, tau_multiplier=scale)["positions"]
-        for scale in (0.5, 0.75, 1.0, 1.25, 1.5)
-    }
-    intervention = tau_intervention_summary(
-        baseline,
-        counterfactuals,
-        truth=test_data.states,
-        epsilon=tau_overlap_epsilon,
-        grid_size=tau_grid_size,
-    )
-
     tau = prediction["tau"]
-    tau_inputs, input_names = _tau_input_features(
+    readout_inputs, input_names = _readout_input_features(
         prediction,
         test_data,
         position_scale=model.config.position_scale,
     )
-    correlation = vector_feature_spearman_correlation(
-        tau,
-        tau_inputs,
-        feature_names=input_names,
-        vector_names=[f"tau_{index}" for index in range(tau.shape[-1])],
-    )
-    change_comparison = vector_change_comparison(tau, tau_inputs)
     selected_count = min(6, tau.shape[0])
     selected_indices = np.linspace(0, tau.shape[0] - 1, selected_count, dtype=int)
     selected_trajectories = pd.DataFrame(
@@ -398,33 +365,12 @@ def _interpretability_outputs(
             "trajectory_index": selected_indices,
         }
     )
-    norm_comparison = vector_norm_comparison(tau[selected_indices], tau_inputs[selected_indices])
-    norm_comparison["trajectory_index"] = norm_comparison["trajectory_index"].map(
-        dict(enumerate(selected_indices))
-    ).astype(int)
-    per_trajectory_correlations: list[pd.DataFrame] = []
-    for trajectory_index in selected_indices:
-        trajectory_correlation = vector_feature_spearman_correlation(
-            tau[trajectory_index],
-            tau_inputs[trajectory_index],
-            feature_names=input_names,
-            vector_names=[f"tau_{index}" for index in range(tau.shape[-1])],
-        )
-        trajectory_correlation.insert(0, "trajectory_index", int(trajectory_index))
-        per_trajectory_correlations.append(trajectory_correlation)
-    correlation_by_trajectory = pd.concat(per_trajectory_correlations, ignore_index=True)
-    lag_limit = min(max(int(tau_lag_max_steps), 0), max(tau.shape[1] - 4, 0))
-    lagged_correlation = lagged_vector_feature_spearman(
-        tau[selected_indices],
-        tau_inputs[selected_indices],
-        feature_names=input_names,
-        vector_names=[f"tau_{index}" for index in range(tau.shape[-1])],
-        max_lag_steps=lag_limit,
+    tau_true_displacement = tau_true_displacement_comparison(
+        tau[selected_indices], test_data.states[selected_indices]
     )
-    lagged_correlation["trajectory_index"] = lagged_correlation["trajectory_index"].map(
+    tau_true_displacement["trajectory_index"] = tau_true_displacement["trajectory_index"].map(
         dict(enumerate(selected_indices))
     ).astype(int)
-    lag_summary, delay_summary = summarize_lagged_spearman(lagged_correlation, test_data.dt)
 
     process_trace = np.trace(prediction["process_covariances"], axis1=-2, axis2=-1)
     measurement_trace = np.trace(prediction["measurement_covariances"][:, 1:], axis1=-2, axis2=-1)
@@ -457,21 +403,13 @@ def _interpretability_outputs(
     covariance_projection_error = float(np.mean(numerator / denominator))
     smallest_eigenvalue = float(np.min(np.linalg.eigvalsh(position_covariance)))
 
-    tau_for_plot = np.concatenate((tau[:, :1], tau), axis=1)
-    plot_tau_trajectory_panel(
-        tau_for_plot,
-        baseline,
-        output_directory / "tau_trajectory_interventions.png",
-        counterfactuals={scale: value for scale, value in counterfactuals.items() if scale != 1.0},
-        truth=test_data.states,
-    )
-    plot_tau_input_vector_norms_grid(
-        norm_comparison,
-        output_directory / "tau_input_vector_norms_six.png",
+    plot_tau_true_displacement_grid(
+        tau_true_displacement,
+        output_directory / "tau_true_displacement_six.png",
     )
     readout_input_correlation = readout_input_spearman_correlation(
         contributions[selected_indices],
-        tau_inputs[selected_indices],
+        readout_inputs[selected_indices],
         feature_names=input_names,
     )
     readout_input_correlation["trajectory_index"] = readout_input_correlation["trajectory_index"].map(
@@ -482,11 +420,6 @@ def _interpretability_outputs(
         output_directory / "readout_input_spearman_six.png",
     )
     heatmap_similarity = readout_heatmap_combination_similarity(readout_input_correlation)
-    plot_tau_input_lag_diagnostics(
-        lag_summary,
-        delay_summary,
-        output_directory / "tau_input_lag_diagnostics.png",
-    )
     plot_noise_adaptation(
         prediction["process_covariances"],
         prediction["measurement_covariances"],
@@ -498,20 +431,9 @@ def _interpretability_outputs(
         "mean_covariance_projection_relative_error": covariance_projection_error,
         "minimum_position_covariance_eigenvalue": smallest_eigenvalue,
         "orthogonality_frobenius_error": float(prediction["orthogonality_error"]),
-        "lag_max_steps": float(lag_limit),
-        "lagged_pairs_with_input_leading_peak": float(
-            (delay_summary["delay_direction"] == "input_leads_tau").sum()
-        ),
     }
     tables = {
-        "intervention": intervention,
-        "correlation": correlation,
-        "change_comparison": change_comparison,
-        "norm_comparison": norm_comparison,
-        "correlation_by_trajectory": correlation_by_trajectory,
-        "lagged_correlation": lagged_correlation,
-        "lag_summary": lag_summary,
-        "delay_summary": delay_summary,
+        "tau_true_displacement": tau_true_displacement,
         "selected_trajectories": selected_trajectories,
         "readout_input_correlation": readout_input_correlation,
         "heatmap_similarity": heatmap_similarity,
@@ -598,20 +520,9 @@ def _run_single_seed(
             full_prediction,
             test_data,
             figures,
-            config.device,
-            config.tau_overlap_epsilon,
-            config.tau_grid_size,
-            config.tau_lag_max_steps,
         )
         output_tables = {
-            "tau_interventions.csv": "intervention",
-            "tau_input_spearman.csv": "correlation",
-            "tau_input_change_comparison.csv": "change_comparison",
-            "tau_input_vector_norms_by_trajectory.csv": "norm_comparison",
-            "tau_input_spearman_by_trajectory.csv": "correlation_by_trajectory",
-            "tau_input_lagged_spearman_by_trajectory.csv": "lagged_correlation",
-            "tau_input_lagged_spearman_summary.csv": "lag_summary",
-            "tau_input_delay_summary.csv": "delay_summary",
+            "tau_true_displacement_by_trajectory.csv": "tau_true_displacement",
             "selected_interpretability_trajectories.csv": "selected_trajectories",
             "readout_input_spearman_by_trajectory.csv": "readout_input_correlation",
             "readout_heatmap_similarity_combinations.csv": "heatmap_similarity",
@@ -683,12 +594,11 @@ through a documented preprocessing step.
   receive the same odometry and initial position in the open-loop task.
 - LNN+UKF uses hidden-state sigma points, causal innovation-history Q/R LSTMs,
   nonlinear range updates, and hidden covariance feedback via cross-covariance.
-- Tau interventions are in-model counterfactuals, not claims of a physical
-  intervention on an AUV.  The complete tau-vector/input-feature Spearman
-  matrix and aligned vector-change data are in `tau_input_spearman.csv` and
-  `tau_input_change_comparison.csv`.  Lagged change correlations use positive
-  lag to mean that an input change precedes a tau change; see
-  `tau_input_delay_summary.csv` and `tau_input_lagged_spearman_summary.csv`.
+- `tau_true_displacement_by_trajectory.csv` and
+  `figures/tau_true_displacement_six.png` compare the raw liquid-time-constant
+  vector norm against the raw norm of each true consecutive displacement.  The
+  displacement is calculated from reference positions only; acoustic ranges do
+  not enter this diagnostic.
 
 Configuration:
 

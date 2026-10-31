@@ -61,7 +61,7 @@ python -m venv .venv
   --threads 4 --output results/synthetic_multiseed
 ```
 
-执行结束后，`REPORT.md` 只汇总本次实际产生的数值；`metrics_summary.csv` 与 `ablation_metrics_summary.csv` 提供每航迹 bootstrap 95% CI；`figures/` 保存轨迹、误差、校准、液态时间常数和内部节点贡献图。`trajectory_comparison_six.png` 使用六条局部裁切轨迹叠加全部模型，不纳入远处锚点；`tau_input_vector_norms_six.png` 比较六条轨迹的 tau 向量模值和标准化输入向量模值变化。若要在 Excel 中修改字体或颜色，请使用 `tools/csv_to_xlsx.py` 批量转换 CSV，而不要把格式化结果当作算法输出的一部分提交。
+执行结束后，`REPORT.md` 只汇总本次实际产生的数值；`metrics_summary.csv` 与 `ablation_metrics_summary.csv` 提供每航迹 bootstrap 95% CI；`figures/` 保存轨迹、误差、校准、液态时间常数和内部节点贡献图。`trajectory_comparison_six.png` 使用六条局部裁切轨迹叠加全部模型，不纳入远处锚点；`tau_true_displacement_six.png` 比较六条轨迹的 tau 向量模值和每步真实位移模值。若要在 Excel 中修改字体或颜色，请使用 `tools/csv_to_xlsx.py` 批量转换 CSV，而不要把格式化结果当作算法输出的一部分提交。
 
 ## 接入 LNN_Lack 数据
 
@@ -116,20 +116,18 @@ np.savez_compressed(
 
 运行器会生成以下可量化诊断，而不只展示轨迹图：
 
-1. **完整液态时间向量与完整输入向量**：保存所有单元形成的 \(\tau(t)\in\mathbb{R}^H\)，并与直接输入的控制东/北分量、滤波位置及由控制导出的速度和连续航向角计算完整的两两 Spearman 矩阵，结果在 `tau_input_spearman.csv`。`tau_input_change_comparison.csv` 保存 \(\|\Delta\tau\|_2\) 与标准化 \(\|\Delta z(u)\|_2\) 的对齐变化；`tau_input_vector_norms_six.png` 展示六条轨迹的向量模值变化，原始模值和逐轨迹 z-score 在 `tau_input_vector_norms_by_trajectory.csv`。逐轨迹 Spearman 明细保留在 `tau_input_spearman_by_trajectory.csv`。
-2. **输入到 tau 的时间滞后**：对每条选中轨迹计算 \(\rho_{ij}(\ell)=\operatorname{Spearman}(\Delta\tau_i(t),\Delta u_j(t-\ell))\)。正 \(\ell\) 表示输入变化先于 tau 变化；完整结果、跨轨迹汇总和峰值延迟分别在 `tau_input_lagged_spearman_by_trajectory.csv`、`tau_input_lagged_spearman_summary.csv`、`tau_input_delay_summary.csv`，图为 `tau_input_lag_diagnostics.png`。仅当跨轨迹平均峰值 \(|\rho|\ge0.20\) 时标记方向，否则为 `no_clear_lag`。该分析量化时序关联，不能单独证明因果关系。
-3. **(\tau) 干预与真实轨迹**：固定输入、初始值和量测，将全部动态 \(\tau(t)\) 乘以 \(0.5,0.75,1,1.25,1.5\)，在 `tau_interventions.csv` 中同时报告相对真实轨迹的 RMSE、MAE、ADE、FDE，以及相对未干预动态 \(\tau(t)\) 的平均/末端偏离、时间对齐重合率
+1. **液态时间常数与真实每步位移**：对六条选中轨迹，计算 \(\|\tau_t\|_2\) 与
    \[
-   O_\epsilon=\frac1T\sum_t\mathbf{1}\{\|\hat x_t^{cf}-\hat x_t\|\le\epsilon\}
+   \|x^{true}_{t+1}-x^{true}_t\|_2.
    \]
-   与栅格占据 IoU。重合率和 IoU 用于衡量干预敏感性；定位性能以真实轨迹误差为准。默认合成场景使用 \(\epsilon=0.10\) m 和 0.50 m 栅格；真实数据应按任务允许定位误差预先设定。独立训练的固定 \(\tau\) 消融在 `ablation_metrics_summary.csv` 的 `Fixed tau` 行。见 `tau_interventions.csv` 和 `tau_trajectory_interventions.png`。
-4. **内部节点到位移的闭合与输入关联**：对每个单元计算 (c_i(t)=A_{:,i}h_i(t))，展示热图并数值检查
+   真实位移只由真值相邻位置相减得到，不使用声学测距、滤波位置或输入向量。原始东向、北向和模值数据在 `tau_true_displacement_by_trajectory.csv`，双纵轴图为 `tau_true_displacement_six.png`。
+2. **内部节点到位移的闭合与输入关联**：对每个单元计算 (c_i(t)=A_{:,i}h_i(t))，展示热图并数值检查
    \[
    Ah_t+b=\sum_i c_i(t)+b.
    \]
    对每条轨迹、每个单元的东向和北向贡献分量，分别与全部输入时间序列计算 Spearman 相关；两个序列使用相同的时间长度。结果在 `readout_input_spearman_by_trajectory.csv`，六轨迹热图为 `readout_input_spearman_six.png`。`readout_heatmap_similarity_combinations.csv` 列出六幅热图全部 57 个两至六轨迹组合：每项汇总组合内热图向量的两两余弦相似度和 Spearman 秩相关的均值、最小值与标准差。每幅图使用相同的 48 个“单元 × 东/北分量 × 输入”单元格；余弦保留符号和幅值模式，秩相关衡量各单元格相对强弱的一致性。
-5. **协方差闭环与校准**：记录 (|AP_hA^\top-P_x\|_F/\|P_x\|_F)、最小特征值、NEES、NIS 和覆盖率。`lnn_ukf_calibration.png` 只展示实际运行产生的分布。
-6. **动态噪声是否有意义**：画出 `tr(Q_t)`、`tr(R_t)` 与新息范数，并报告二者与新息的 Spearman 相关；结果在 `adaptive_noise_diagnostics.png` 与 `noise_adaptation_correlation.csv`。
+3. **协方差闭环与校准**：记录 (|AP_hA^\top-P_x\|_F/\|P_x\|_F)、最小特征值、NEES、NIS 和覆盖率。`lnn_ukf_calibration.png` 只展示实际运行产生的分布。
+4. **动态噪声是否有意义**：画出 `tr(Q_t)`、`tr(R_t)` 与新息范数，并报告二者与新息的 Spearman 相关；结果在 `adaptive_noise_diagnostics.png` 与 `noise_adaptation_correlation.csv`。
 
 真实论文实验还应按任务/环境分组切分，覆盖量测稀疏、丢包、离群值、洋流强度、训练样本比例和未见环境等压力条件；每个条件使用至少 5–10 个训练种子，逐航迹配对 bootstrap 或 Wilcoxon 检验，并对多模型比较进行 Holm 校正。
 

@@ -1,5 +1,5 @@
 {
-  "output_dir": "/workspace/LNN_UKF/results/synthetic_validation",
+  "output_dir": "results/synthetic_validation",
   "data_path": null,
   "seeds": [
     7
@@ -15,9 +15,6 @@
   "device": "cpu",
   "run_ablations": true,
   "save_models": false,
-  "tau_overlap_epsilon": 0.1,
-  "tau_grid_size": 0.5,
-  "tau_lag_max_steps": 8,
   "filter_q_candidates": [
     0.0025,
     0.01,

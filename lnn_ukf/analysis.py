@@ -391,6 +391,42 @@ def readout_heatmap_combination_similarity(correlations: pd.DataFrame) -> pd.Dat
     return pd.DataFrame(rows)
 
 
+def tau_true_displacement_comparison(tau: Array, truth: Array) -> pd.DataFrame:
+    """Align liquid-time-constant norms with true step displacements only.
+
+    The displacement is computed exclusively as the first difference of the
+    reference position.  Acoustic measurements and filtered positions are not
+    inputs to this diagnostic.
+    """
+    tau_array = np.asarray(tau, dtype=float)
+    truth_array = _batched_trajectory(truth, "truth")
+    if tau_array.ndim == 2:
+        tau_array = tau_array[None, ...]
+    if tau_array.ndim != 3:
+        raise ValueError("tau must have shape [T,H] or [N,T,H]")
+    expected_shape = (truth_array.shape[0], truth_array.shape[1] - 1)
+    if tau_array.shape[:2] != expected_shape:
+        raise ValueError("tau must have one value per true-trajectory transition")
+
+    true_displacement = np.diff(truth_array, axis=1)
+    tau_norm = np.linalg.norm(tau_array, axis=-1)
+    displacement_norm = np.linalg.norm(true_displacement, axis=-1)
+    rows: list[dict[str, float | int]] = []
+    for trajectory_index in range(tau_array.shape[0]):
+        for time_index in range(tau_array.shape[1]):
+            rows.append(
+                {
+                    "trajectory_index": trajectory_index,
+                    "time_index": time_index,
+                    "tau_vector_l2": float(tau_norm[trajectory_index, time_index]),
+                    "true_displacement_east_m": float(true_displacement[trajectory_index, time_index, 0]),
+                    "true_displacement_north_m": float(true_displacement[trajectory_index, time_index, 1]),
+                    "true_displacement_l2_m": float(displacement_norm[trajectory_index, time_index]),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def vector_change_comparison(vector: Array, features: Array) -> pd.DataFrame:
     """Measure aligned changes of a state vector and standardized input vector.
 
@@ -1052,6 +1088,58 @@ def plot_tau_input_vector_norms_grid(
     )
     figure.suptitle(title, fontsize=13, y=0.985)
     figure.subplots_adjust(left=0.07, right=0.985, bottom=0.08, top=0.86, wspace=0.20, hspace=0.28)
+    figure.savefig(output, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+    return output
+
+
+def plot_tau_true_displacement_grid(
+    comparison: pd.DataFrame,
+    path: str | Path,
+    title: str = "Tau-vector norm and true step displacement",
+) -> Path:
+    """Plot raw tau norms and raw true step-displacement norms for six paths."""
+    required = {"trajectory_index", "time_index", "tau_vector_l2", "true_displacement_l2_m"}
+    if missing := required - set(comparison.columns):
+        raise ValueError(f"comparison is missing required columns: {sorted(missing)}")
+    trajectories = list(dict.fromkeys(comparison["trajectory_index"].astype(int)))
+    if not trajectories or len(trajectories) > 6:
+        raise ValueError("comparison must contain between one and six trajectories")
+    output = _prepare_path(path)
+    figure, axes = plt.subplots(2, 3, figsize=(14.0, 8.0))
+    handles: list[object] = []
+    for panel, trajectory_index in enumerate(trajectories):
+        axis = axes.ravel()[panel]
+        frame = comparison[comparison["trajectory_index"] == trajectory_index].sort_values("time_index")
+        tau_line, = axis.plot(
+            frame["time_index"],
+            frame["tau_vector_l2"],
+            color="#d62728",
+            linewidth=2.0,
+            label=r"$\|\tau_t\|_2$",
+        )
+        displacement_axis = axis.twinx()
+        displacement_line, = displacement_axis.plot(
+            frame["time_index"],
+            frame["true_displacement_l2_m"],
+            color="#1f77b4",
+            linewidth=2.0,
+            label=r"$\|x^{true}_{t+1}-x^{true}_t\|_2$",
+        )
+        if panel == 0:
+            handles = [tau_line, displacement_line]
+        axis.set_title(f"Trajectory {trajectory_index + 1}", fontsize=10)
+        axis.set_xlabel("Time step")
+        axis.set_ylabel(r"$\|\tau_t\|_2$", color="#d62728")
+        displacement_axis.set_ylabel("True step displacement / m", color="#1f77b4")
+        axis.tick_params(axis="y", labelcolor="#d62728")
+        displacement_axis.tick_params(axis="y", labelcolor="#1f77b4")
+        axis.grid(alpha=0.20)
+    for axis in axes.ravel()[len(trajectories) :]:
+        axis.set_visible(False)
+    figure.suptitle(title, fontsize=13, y=0.99)
+    figure.legend(handles=handles, loc="upper center", ncol=2, frameon=False, bbox_to_anchor=(0.5, 0.955))
+    figure.subplots_adjust(left=0.08, right=0.92, bottom=0.08, top=0.88, wspace=0.40, hspace=0.42)
     figure.savefig(output, dpi=200, bbox_inches="tight")
     plt.close(figure)
     return output

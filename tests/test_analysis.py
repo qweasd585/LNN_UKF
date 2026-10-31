@@ -10,11 +10,13 @@ from lnn_ukf.analysis import (
     plot_tau_input_diagnostics,
     plot_tau_input_lag_diagnostics,
     plot_tau_input_vector_norms_grid,
+    plot_tau_true_displacement_grid,
     plot_trajectory_comparison_grid,
     readout_heatmap_combination_similarity,
     summarize_lagged_spearman,
     readout_input_spearman_correlation,
     tau_intervention_summary,
+    tau_true_displacement_comparison,
     time_aligned_overlap,
     trajectory_metrics,
     vector_change_comparison,
@@ -69,6 +71,22 @@ def test_vector_input_correlation_and_compact_trajectory_grid(tmp_path) -> None:
     assert set(norms.columns) >= {"tau_vector_l2", "input_vector_standardized_l2"}
     norm_image = plot_tau_input_vector_norms_grid(norms, tmp_path / "norms.png")
     assert norm_image.is_file() and norm_image.stat().st_size > 0
+
+    true_motion = np.array([[[0.0, 0.0], [0.8, 0.3], [1.2, 1.1], [2.0, 1.0], [2.4, 1.8]]])
+    tau_motion = np.array([[[0.5, 0.2], [0.8, 0.1], [0.4, 0.9], [0.7, 0.6]]])
+    tau_motion_comparison = tau_true_displacement_comparison(tau_motion, true_motion)
+    assert set(tau_motion_comparison.columns) == {
+        "trajectory_index",
+        "time_index",
+        "tau_vector_l2",
+        "true_displacement_east_m",
+        "true_displacement_north_m",
+        "true_displacement_l2_m",
+    }
+    true_motion_image = plot_tau_true_displacement_grid(
+        tau_motion_comparison, tmp_path / "tau_true_displacement.png"
+    )
+    assert true_motion_image.is_file() and true_motion_image.stat().st_size > 0
 
     truth = np.stack((np.c_[np.arange(4), np.zeros(4)], np.c_[np.arange(4), np.ones(4)]))
     image = plot_trajectory_comparison_grid(

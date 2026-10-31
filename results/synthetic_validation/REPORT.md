@@ -41,18 +41,17 @@ through a documented preprocessing step.
   receive the same odometry and initial position in the open-loop task.
 - LNN+UKF uses hidden-state sigma points, causal innovation-history Q/R LSTMs,
   nonlinear range updates, and hidden covariance feedback via cross-covariance.
-- Tau interventions are in-model counterfactuals, not claims of a physical
-  intervention on an AUV.  The complete tau-vector/input-feature Spearman
-  matrix and aligned vector-change data are in `tau_input_spearman.csv` and
-  `tau_input_change_comparison.csv`.  Lagged change correlations use positive
-  lag to mean that an input change precedes a tau change; see
-  `tau_input_delay_summary.csv` and `tau_input_lagged_spearman_summary.csv`.
+- `tau_true_displacement_by_trajectory.csv` and
+  `figures/tau_true_displacement_six.png` compare the raw liquid-time-constant
+  vector norm against the raw norm of each true consecutive displacement.  The
+  displacement is calculated from reference positions only; acoustic ranges do
+  not enter this diagnostic.
 
 Configuration:
 
 ```json
 {
-  "output_dir": "/workspace/LNN_UKF/results/synthetic_validation",
+  "output_dir": "results/synthetic_validation",
   "data_path": null,
   "seeds": [
     7
@@ -68,9 +67,6 @@ Configuration:
   "device": "cpu",
   "run_ablations": true,
   "save_models": false,
-  "tau_overlap_epsilon": 0.1,
-  "tau_grid_size": 0.5,
-  "tau_lag_max_steps": 8,
   "filter_q_candidates": [
     0.0025,
     0.01,
