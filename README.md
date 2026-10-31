@@ -1,4 +1,6 @@
-# LNN+UKF：可解释的水下 AUV 协同定位基准
+# LNN_UKF
+
+## LNN+UKF：可解释的水下 AUV 协同定位基准
 
 这是依据 `LNN.docx` 实现的可运行研究代码。它将 LNN 的内部连续状态作为 UKF 的状态空间，用 Sigma 点传播非线性液态动力学，再用声学测距量测更新外部位置与内部协方差。代码还包含 UKF、CKF、EKF、LNN（无 UKF）、LSTM、CTGRU 和 CTRNN 的统一比较，消融、置信度校准和可解释性实验。
 
